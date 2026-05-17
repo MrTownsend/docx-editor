@@ -1132,8 +1132,13 @@ export interface InlineSdt {
   type: 'inlineSdt';
   /** SDT properties */
   properties: SdtProperties;
-  /** Content runs inside the control */
-  content: (Run | Hyperlink)[];
+  /**
+   * Inline content held inside the control. OOXML allows runs,
+   * hyperlinks, simple/complex fields, nested SDTs, and math at this
+   * level; the renderer must descend into all of them so docProps-bound
+   * fields and similar template content survive paged rendering.
+   */
+  content: (Run | Hyperlink | SimpleField | ComplexField | InlineSdt | MathEquation)[];
 }
 
 /**

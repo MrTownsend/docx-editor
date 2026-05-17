@@ -1118,6 +1118,15 @@ function convertInlineSdt(
     } else if (content.type === 'hyperlink') {
       const linkNodes = convertHyperlink(content, styleRunFormatting, styleResolver);
       inlineNodes.push(...linkNodes);
+    } else if (content.type === 'simpleField' || content.type === 'complexField') {
+      const fieldNode = convertField(content, styleRunFormatting);
+      if (fieldNode) inlineNodes.push(fieldNode);
+    } else if (content.type === 'inlineSdt') {
+      const nestedSdt = convertInlineSdt(content, styleRunFormatting, styleResolver);
+      if (nestedSdt) inlineNodes.push(nestedSdt);
+    } else if (content.type === 'mathEquation') {
+      const mathNode = convertMathEquation(content);
+      if (mathNode) inlineNodes.push(mathNode);
     }
   }
 

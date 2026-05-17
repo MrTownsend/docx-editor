@@ -1136,7 +1136,13 @@ function parseParagraphContents(
             type: 'inlineSdt',
             properties,
             content: sdtParsed.filter(
-              (c): c is Run | Hyperlink => c.type === 'run' || c.type === 'hyperlink'
+              (c): c is InlineSdt['content'][number] =>
+                c.type === 'run' ||
+                c.type === 'hyperlink' ||
+                c.type === 'simpleField' ||
+                c.type === 'complexField' ||
+                c.type === 'inlineSdt' ||
+                c.type === 'mathEquation'
             ),
           };
           contents.push(inlineSdt);

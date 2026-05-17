@@ -127,3 +127,51 @@ describe('parseParagraph rendered page break markers', () => {
     expect(paragraph.renderedPageBreakBefore).toBeUndefined();
   });
 });
+
+describe('parseParagraph SDT content preservation', () => {
+  test('keeps a simple field that lives inside an inline SDT', () => {
+    const paragraph = parseParagraphXml(`
+      <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:sdt>
+          <w:sdtPr><w:alias w:val="title-control"/></w:sdtPr>
+          <w:sdtContent>
+            <w:fldSimple w:instr="TITLE">
+              <w:r><w:t>Cached title</w:t></w:r>
+            </w:fldSimple>
+          </w:sdtContent>
+        </w:sdt>
+      </w:p>
+    `);
+
+    expect(paragraph.content).toHaveLength(1);
+    const sdt = paragraph.content[0];
+    expect(sdt.type).toBe('inlineSdt');
+    if (sdt.type !== 'inlineSdt') return;
+    expect(sdt.content).toHaveLength(1);
+    expect(sdt.content[0].type).toBe('simpleField');
+  });
+
+  test('keeps a nested inline SDT inside an inline SDT', () => {
+    const paragraph = parseParagraphXml(`
+      <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:sdt>
+          <w:sdtPr><w:alias w:val="outer"/></w:sdtPr>
+          <w:sdtContent>
+            <w:sdt>
+              <w:sdtPr><w:alias w:val="inner"/></w:sdtPr>
+              <w:sdtContent>
+                <w:r><w:t>Nested text</w:t></w:r>
+              </w:sdtContent>
+            </w:sdt>
+          </w:sdtContent>
+        </w:sdt>
+      </w:p>
+    `);
+
+    const outer = paragraph.content[0];
+    expect(outer.type).toBe('inlineSdt');
+    if (outer.type !== 'inlineSdt') return;
+    expect(outer.content).toHaveLength(1);
+    expect(outer.content[0].type).toBe('inlineSdt');
+  });
+});
