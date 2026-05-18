@@ -41,27 +41,14 @@ import { DecorationLayer } from './DecorationLayer';
 import {
   layoutDocument,
   findPageIndexContainingPmPos,
-  collectSectionConfigs,
 } from '@eigenpal/docx-editor-core/layout-engine';
-import type { ColumnLayout, SectionLayoutConfig } from '@eigenpal/docx-editor-core/layout-engine';
 import type {
   Layout,
   FlowBlock,
   Measure,
-  ParagraphBlock,
-  TableBlock,
-  TableMeasure,
-  ImageBlock,
-  ImageRun,
   FootnoteContent,
   PageMargins,
   SectionBreakBlock,
-  TextBoxBlock,
-} from '@eigenpal/docx-editor-core/layout-engine';
-import {
-  DEFAULT_TEXTBOX_MARGINS,
-  DEFAULT_TEXTBOX_WIDTH,
-  assertExhaustiveFlowBlock,
 } from '@eigenpal/docx-editor-core/layout-engine';
 
 // Table commands (for quick-action insert buttons)
@@ -76,28 +63,18 @@ import { toFlowBlocks } from '@eigenpal/docx-editor-core/layout-bridge';
 import type { WrapType } from '@eigenpal/docx-editor-core/docx/wrapTypes';
 import { hitTestImage, captureInlinePositionEmu } from '@eigenpal/docx-editor-core/layout-painter';
 import {
-  measureParagraph,
   resetCanvasContext,
   clearAllCaches,
-  getCachedParagraphMeasure,
-  setCachedParagraphMeasure,
-  type FloatingImageZone,
-  measureTableBlock,
   getPageSize,
   getMargins,
   DEFAULT_PAGE_HEIGHT_PX,
 } from '@eigenpal/docx-editor-core/layout-bridge';
-import {
-  hitTestFragment,
-  hitTestTableCell,
-  getPageTop,
-} from '@eigenpal/docx-editor-core/layout-bridge';
+import { hitTestFragment, hitTestTableCell } from '@eigenpal/docx-editor-core/layout-bridge';
 import { clickToPosition } from '@eigenpal/docx-editor-core/layout-bridge';
 import { clickToPositionDom } from '@eigenpal/docx-editor-core/layout-bridge';
 import {
   findBodyEmptyRuns,
   findBodyPmAnchor,
-  findBodyPmAnchors,
   findBodyPmSpans,
 } from '@eigenpal/docx-editor-core/layout-bridge';
 import {
@@ -106,7 +83,7 @@ import {
   type SelectionRect,
   type CaretPosition,
 } from '@eigenpal/docx-editor-core/layout-bridge';
-import { findWordBoundaries, emuToPixels, pixelsToEmu } from '@eigenpal/docx-editor-core/utils';
+import { findWordBoundaries, pixelsToEmu } from '@eigenpal/docx-editor-core/utils';
 
 // Layout painter
 import { LayoutPainter, type BlockLookup } from '@eigenpal/docx-editor-core/layout-painter';
@@ -116,7 +93,6 @@ import {
   type RenderPagesUpdateKind,
   type HeaderFooterContent,
   type FootnoteRenderItem,
-  isTextWrappingFloatingImageRun,
   findImageElement as coreFindImageElement,
 } from '@eigenpal/docx-editor-core/layout-painter';
 
@@ -124,11 +100,11 @@ import {
 import { LayoutSelectionGate } from './LayoutSelectionGate';
 
 // Visual line navigation hook
-import { useVisualLineNavigation } from '../hooks/useVisualLineNavigation';
-import { useDragAutoScroll } from '../hooks/useDragAutoScroll';
+import { useVisualLineNavigation } from '../../hooks/useVisualLineNavigation';
+import { useDragAutoScroll } from '../../hooks/useDragAutoScroll';
 
 // Sidebar constants
-import { SIDEBAR_DOCUMENT_SHIFT } from '../components/sidebar/constants';
+import { SIDEBAR_DOCUMENT_SHIFT } from '../sidebar/constants';
 
 // Types
 import type {
@@ -147,81 +123,30 @@ import {
   detectTableInsertHover,
   TABLE_INSERT_HIDE_DELAY_MS as TABLE_INSERT_HIDE_DELAY,
 } from '@eigenpal/docx-editor-core/layout-bridge';
-import type { RenderedDomContext } from '../plugin-api/types';
-import { createRenderedDomContext } from '../plugin-api/RenderedDomContext';
+import type { RenderedDomContext } from '../../plugin-api/types';
+import { createRenderedDomContext } from '../../plugin-api/RenderedDomContext';
 import { findVerticalScrollParentOrRoot } from '@eigenpal/docx-editor-core/utils/findVerticalScrollParent';
 
-/**
- * Vertically scroll `container` so `el`'s center aligns with the container's visible center.
- * Avoids `element.scrollIntoView()` — it misbehaves when content sits under CSS `transform`
- * (e.g. zoom viewport); see `useVisualLineNavigation` scrollIntoViewIfNeeded comment.
- */
-function scrollElementCenterIntoContainer(
-  el: HTMLElement,
-  container: HTMLElement,
-  behavior: ScrollBehavior
-): void {
-  const cRect = container.getBoundingClientRect();
-  const eRect = el.getBoundingClientRect();
-  const elCenter = eRect.top + eRect.height / 2;
-  const cCenter = cRect.top + cRect.height / 2;
-  const delta = elCenter - cCenter;
-  const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
-  const targetTop = Math.max(0, Math.min(maxScroll, container.scrollTop + delta));
-  if (behavior === 'smooth') {
-    container.scrollTo({ top: targetTop, behavior: 'smooth' });
-  } else {
-    container.scrollTop = targetTop;
-  }
-}
+import {
+  scrollElementCenterIntoContainer,
+  runAfterPaint,
+  findPaintedPmStartAtOrBefore,
+  viewportMinHeightPx,
+} from './scrollUtils';
+import {
+  DEFAULT_PAGE_WIDTH,
+  DEFAULT_PAGE_GAP,
+  EMPTY_PLUGINS,
+  containerStyles,
+  viewportStyles,
+  pagesContainerStyles,
+  pluginOverlaysStyles,
+} from './styles';
+import { computeAnchorPositions } from './anchorPositions';
+import { twipsToPixels, getColumns, computePerBlockWidths } from './columnLayout';
+import { measureBlocks } from './measureBlock';
 
-/**
- * Run `fn` after layout/paint has settled (3 nested rAFs). Aborts if `signal`
- * fires before any of the frames runs, and tracks rAF ids so they can be
- * cancelled by the caller. Used for the virtualized-paint settle path in
- * scrollToPositionImpl / scrollToParaIdImpl.
- */
-function runAfterPaint(fn: () => void, signal: AbortSignal): void {
-  if (signal.aborted) return;
-  const id1 = requestAnimationFrame(() => {
-    if (signal.aborted) return;
-    const id2 = requestAnimationFrame(() => {
-      if (signal.aborted) return;
-      const id3 = requestAnimationFrame(() => {
-        if (signal.aborted) return;
-        fn();
-      });
-      signal.addEventListener('abort', () => cancelAnimationFrame(id3), { once: true });
-    });
-    signal.addEventListener('abort', () => cancelAnimationFrame(id2), { once: true });
-  });
-  signal.addEventListener('abort', () => cancelAnimationFrame(id1), { once: true });
-}
-
-/**
- * Largest painted body `[data-pm-start]` value ≤ `pmPos`. Used to anchor scroll
- * restore when `renderPages` rebuilds the DOM. Header/footer anchors are skipped
- * because their PM positions live in a separate document and would mis-resolve.
- */
-function findPaintedPmStartAtOrBefore(pages: HTMLElement, pmPos: number): number | null {
-  let best: number | null = null;
-  const list = findBodyPmAnchors(pages);
-  for (let i = 0; i < list.length; i++) {
-    const raw = list[i].dataset.pmStart;
-    if (raw == null) continue;
-    const p = Number(raw);
-    if (Number.isNaN(p)) continue;
-    if (p <= pmPos && (best === null || p > best)) best = p;
-  }
-  return best;
-}
-
-/** Min-height of the zoom/viewport wrapper (padding + page stack). Must match JSX `totalHeight`. */
-function viewportMinHeightPx(layout: Layout, pageGap: number): number {
-  const n = layout.pages.length;
-  const pagesHeight = layout.pages.reduce((sum, page) => sum + page.size.h, 0);
-  return pagesHeight + Math.max(0, n - 1) * pageGap + VIEWPORT_PADDING_TOP + 24;
-}
+export { DEFAULT_PAGE_WIDTH };
 
 // =============================================================================
 // TYPES
@@ -359,589 +284,10 @@ export interface PagedEditorRef {
 }
 
 // =============================================================================
-// CONSTANTS
-// =============================================================================
-
-// Default page size (US Letter at 96 DPI)
-export const DEFAULT_PAGE_WIDTH = 816;
-
-const DEFAULT_PAGE_GAP = 24;
-
-// Table-insert hover constants live in core
-// (`@eigenpal/docx-editor-core/layout-bridge`) so React + Vue share the
-// same hit-test parameters.
-
-// Stable empty array to avoid re-creating on each render
-const EMPTY_PLUGINS: Plugin[] = [];
-
-// =============================================================================
-// STYLES
-// =============================================================================
-
-const containerStyles: CSSProperties = {
-  position: 'relative',
-  width: '100%',
-  minHeight: '100%',
-  overflow: 'visible',
-  backgroundColor: 'var(--doc-bg, #f8f9fa)',
-};
-
-/** Padding above page content in the viewport div. */
-const VIEWPORT_PADDING_TOP = 24;
-
-const viewportStyles: CSSProperties = {
-  position: 'relative',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  paddingTop: VIEWPORT_PADDING_TOP,
-  paddingBottom: 24,
-  overflowAnchor: 'none',
-};
-
-const pagesContainerStyles: CSSProperties = {
-  position: 'relative',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  overflowAnchor: 'none',
-};
-
-const pluginOverlaysStyles: CSSProperties = {
-  position: 'absolute',
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  pointerEvents: 'none',
-  overflow: 'visible',
-  zIndex: 8,
-};
-
-// =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
-
-/**
- * Compute anchor Y positions for comments/tracked-changes sidebar.
- * Uses getCaretPosition for paragraphs/images; for table content, finds
- * the containing fragment and drills into rows for exact Y offset.
- * Returns a Map of "comment-{id}" / "revision-{revisionId}" → scroll-container Y.
- */
-function computeAnchorPositions(
-  pmView: import('prosemirror-view').EditorView | null,
-  layout: Layout,
-  blocks: FlowBlock[],
-  measures: Measure[],
-  renderedPageGap: number
-): Map<string, number> {
-  const positions = new Map<string, number>();
-  if (!pmView?.state) return positions;
-
-  const { doc: pmDoc, schema } = pmView.state;
-  const commentType = schema.marks.comment;
-  const insertionType = schema.marks.insertion;
-  const deletionType = schema.marks.deletion;
-  if (!commentType && !insertionType && !deletionType) return positions;
-
-  const seen = new Set<string>();
-  // Offset from layout coords to scroll-container coords:
-  // viewport paddingTop + pages container padding (CSS padding = pageGap)
-  const contentOffset = VIEWPORT_PADDING_TOP + renderedPageGap;
-
-  pmDoc.descendants((node, pos) => {
-    if (!node.isText) return;
-    for (const mark of node.marks) {
-      let key: string | null = null;
-      if (commentType && mark.type === commentType) {
-        key = `comment-${mark.attrs.commentId}`;
-      } else if (
-        (insertionType && mark.type === insertionType) ||
-        (deletionType && mark.type === deletionType)
-      ) {
-        key = `revision-${mark.attrs.revisionId}`;
-      }
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-
-      // Try exact position (paragraphs/images)
-      const caret = getCaretPosition(layout, blocks, measures, pos);
-      if (caret) {
-        positions.set(key, caret.y + contentOffset);
-        continue;
-      }
-
-      // Fallback: find containing fragment (tables, etc.) by PM position
-      for (let pi = 0; pi < layout.pages.length; pi++) {
-        const page = layout.pages[pi];
-        let found = false;
-        for (const frag of page.fragments) {
-          const fStart = frag.pmStart ?? 0;
-          const fEnd = (frag as { pmEnd?: number }).pmEnd ?? fStart;
-          if (pos < fStart || pos > fEnd) continue;
-
-          const rowOffsetY =
-            frag.kind === 'table' ? getTableRowOffset(blocks, measures, frag, pos) : 0;
-          positions.set(key, frag.y + rowOffsetY + getPageTop(layout, pi) + contentOffset);
-          found = true;
-          break;
-        }
-        if (found) break;
-      }
-    }
-  });
-
-  return positions;
-}
-
-/**
- * Find the Y offset within a table fragment to the row containing a PM position.
- * Sums row heights until finding the row that contains the given position.
- */
-function getTableRowOffset(
-  blocks: FlowBlock[],
-  measures: Measure[],
-  frag: { blockId: string | number; fromRow: number; toRow: number },
-  pmPos: number
-): number {
-  const blockIdx = blocks.findIndex((b) => b.id === frag.blockId);
-  if (blockIdx === -1) return 0;
-  const tBlock = blocks[blockIdx];
-  const tMeasure = measures[blockIdx];
-  if (tBlock.kind !== 'table' || tMeasure.kind !== 'table') return 0;
-
-  let offsetY = 0;
-  for (let ri = frag.fromRow; ri < frag.toRow; ri++) {
-    const row = (tBlock as TableBlock).rows[ri];
-    if (!row) break;
-    const posInRow = row.cells.some((cell) =>
-      cell.blocks.some((b) => {
-        const s = (b as { pmStart?: number }).pmStart ?? 0;
-        const e = (b as { pmEnd?: number }).pmEnd ?? s;
-        return pmPos >= s && pmPos <= e;
-      })
-    );
-    if (posInRow) break;
-    offsetY += (tMeasure as TableMeasure).rows[ri]?.height ?? 0;
-  }
-  return offsetY;
-}
-
-/**
- * Convert twips to pixels (1 twip = 1/20 point, 96 pixels per inch).
- */
-function twipsToPixels(twips: number): number {
-  return Math.round((twips / 1440) * 96);
-}
-
-// `getPageSize` and `getMargins` live in
-// `@eigenpal/docx-editor-core/layout-bridge` (sectionGeometry) so React
-// and Vue agree on the SectionProperties → pixel translation.
-
-/**
- * Extract column layout from section properties.
- * Returns undefined for single-column (default) to avoid unnecessary paginator overhead.
- */
-function getColumns(sectionProps: SectionProperties | null | undefined): ColumnLayout | undefined {
-  const count = sectionProps?.columnCount ?? 1;
-  if (count <= 1) return undefined;
-  // Default column spacing: 720 twips (0.5 inch) per OOXML spec
-  const gap = twipsToPixels(sectionProps?.columnSpace ?? 720);
-  return {
-    count,
-    gap,
-    equalWidth: sectionProps?.equalWidth ?? true,
-    separator: sectionProps?.separator,
-  };
-}
-
-function columnWidthForSection(config: SectionLayoutConfig): number {
-  const contentWidth = config.pageSize.w - config.margins.left - config.margins.right;
-  const cols = config.columns;
-  if (!cols || cols.count <= 1) return contentWidth;
-  return Math.floor((contentWidth - (cols.count - 1) * cols.gap) / cols.count);
-}
-
-/**
- * Compute per-block measurement widths by scanning for section breaks.
- * Blocks must be measured with the page width/margins/columns of their own
- * section so that the layout engine can paginate them against the right
- * geometry without remeasuring.
- */
-function computePerBlockWidths(
-  blocks: FlowBlock[],
-  initialConfig: SectionLayoutConfig,
-  finalConfig: SectionLayoutConfig
-): number[] {
-  const { configs: sectionConfigs, breakIndices } = collectSectionConfigs(
-    blocks,
-    initialConfig,
-    finalConfig
-  );
-
-  let sectionIdx = 0;
-  const widths: number[] = [];
-
-  for (let i = 0; i < blocks.length; i++) {
-    widths.push(columnWidthForSection(sectionConfigs[sectionIdx] ?? initialConfig));
-
-    if (sectionIdx < breakIndices.length && i === breakIndices[sectionIdx]) {
-      sectionIdx++;
-    }
-  }
-
-  return widths;
-}
-
-// `isTextWrappingFloatingImageRun` and `emuToPixels` are imported from core. Local
-// duplicates were drifting from the canonical implementations; sharing
-// keeps them in lockstep across React + Vue adapters.
-
-// `measureTableBlock` lives in `@eigenpal/docx-editor-core/layout-bridge`
-// so the Vue adapter shares it. Imported via the layout-bridge barrel
-// alongside the other table-width utilities.
-
-/**
- * Extract floating image exclusion zones from all blocks.
- * Called before measurement to determine line width reductions.
- *
- * For images with vertical align="top" relative to margin, they're at Y=0.
- * The exclusion zones define the areas where text lines need reduced widths.
- */
-/**
- * Extended floating zone info that includes anchor block index
- */
-interface FloatingZoneWithAnchor extends FloatingImageZone {
-  /** Block index where this floating image is anchored */
-  anchorBlockIndex: number;
-  /** If true, zone is positioned relative to margin/page and applies to all blocks */
-  isMarginRelative?: boolean;
-}
-
-function extractFloatingZones(blocks: FlowBlock[], contentWidth: number): FloatingZoneWithAnchor[] {
-  const zones: FloatingZoneWithAnchor[] = [];
-
-  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-    const block = blocks[blockIndex];
-    if (block.kind !== 'paragraph') continue;
-
-    const paragraphBlock = block as ParagraphBlock;
-
-    for (const run of paragraphBlock.runs) {
-      if (run.kind !== 'image') continue;
-      const imgRun = run as ImageRun;
-
-      if (!isTextWrappingFloatingImageRun(imgRun)) continue;
-
-      // Calculate Y position based on vertical alignment
-      let topY = 0;
-      const position = imgRun.position;
-      const distTop = imgRun.distTop ?? 0;
-      const distBottom = imgRun.distBottom ?? 0;
-      const distLeft = imgRun.distLeft ?? 12;
-      const distRight = imgRun.distRight ?? 12;
-
-      if (position?.vertical) {
-        const v = position.vertical;
-        if (v.align === 'top' && v.relativeTo === 'margin') {
-          // Image at top of content area
-          topY = 0;
-        } else if (v.posOffset !== undefined) {
-          topY = emuToPixels(v.posOffset);
-        }
-        // Other cases (paragraph-relative) are harder to handle without knowing paragraph positions
-      }
-
-      const bottomY = topY + imgRun.height;
-
-      // Calculate margins based on horizontal position
-      let leftMargin = 0;
-      let rightMargin = 0;
-
-      if (position?.horizontal) {
-        const h = position.horizontal;
-        if (h.align === 'left') {
-          // Image on left - text needs left margin
-          leftMargin = imgRun.width + distRight;
-        } else if (h.align === 'right') {
-          // Image on right - text needs right margin
-          rightMargin = imgRun.width + distLeft;
-        } else if (h.posOffset !== undefined) {
-          const x = emuToPixels(h.posOffset);
-          if (x < contentWidth / 2) {
-            leftMargin = x + imgRun.width + distRight;
-          } else {
-            rightMargin = contentWidth - x + distLeft;
-          }
-        }
-      } else if (imgRun.cssFloat === 'left') {
-        leftMargin = imgRun.width + distRight;
-      } else if (imgRun.cssFloat === 'right') {
-        rightMargin = imgRun.width + distLeft;
-      }
-
-      if (leftMargin > 0 || rightMargin > 0) {
-        // Images positioned relative to margin/page apply globally (before their anchor paragraph)
-        const isMarginRelative =
-          position?.vertical?.relativeTo === 'margin' || position?.vertical?.relativeTo === 'page';
-        zones.push({
-          leftMargin,
-          rightMargin,
-          topY: topY - distTop,
-          bottomY: bottomY + distBottom,
-          anchorBlockIndex: blockIndex,
-          isMarginRelative,
-        });
-      }
-    }
-  }
-
-  // Floating tables (block-level) - treat them as exclusion zones for subsequent text
-  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-    const block = blocks[blockIndex];
-    if (block.kind !== 'table') continue;
-
-    const tableBlock = block as TableBlock;
-    const floating = tableBlock.floating;
-    if (!floating) continue;
-
-    const tableMeasure = measureTableBlock(tableBlock, contentWidth, measureBlock);
-    const tableWidth = tableMeasure.totalWidth;
-    const tableHeight = tableMeasure.totalHeight;
-
-    const distLeft = floating.leftFromText ?? 12;
-    const distRight = floating.rightFromText ?? 12;
-    const distTop = floating.topFromText ?? 0;
-    const distBottom = floating.bottomFromText ?? 0;
-
-    let leftMargin = 0;
-    let rightMargin = 0;
-
-    // Determine horizontal position relative to content area
-    let x = 0;
-    if (floating.tblpX !== undefined) {
-      x = floating.tblpX;
-    } else if (floating.tblpXSpec) {
-      if (floating.tblpXSpec === 'left' || floating.tblpXSpec === 'inside') {
-        x = 0;
-      } else if (floating.tblpXSpec === 'right' || floating.tblpXSpec === 'outside') {
-        x = contentWidth - tableWidth;
-      } else if (floating.tblpXSpec === 'center') {
-        x = (contentWidth - tableWidth) / 2;
-      }
-    } else if (tableBlock.justification === 'center') {
-      x = (contentWidth - tableWidth) / 2;
-    } else if (tableBlock.justification === 'right') {
-      x = contentWidth - tableWidth;
-    }
-
-    if (x < contentWidth / 2) {
-      leftMargin = x + tableWidth + distRight;
-    } else {
-      rightMargin = contentWidth - x + distLeft;
-    }
-
-    const topY = floating.tblpY ?? 0;
-    const bottomY = topY + tableHeight;
-
-    zones.push({
-      leftMargin,
-      rightMargin,
-      topY: topY - distTop,
-      bottomY: bottomY + distBottom,
-      anchorBlockIndex: blockIndex,
-    });
-  }
-
-  return zones;
-}
-
-/**
- * Measure a block based on its type.
- */
-function measureBlock(
-  block: FlowBlock,
-  contentWidth: number,
-  floatingZones?: FloatingImageZone[],
-  cumulativeY?: number
-): Measure {
-  switch (block.kind) {
-    case 'paragraph': {
-      const pBlock = block as ParagraphBlock;
-
-      // Cache paragraph measurements when no floating zones affect this block.
-      // Safe because without floating zones the result depends only on content
-      // and contentWidth (both captured in the cache key). When floating zones
-      // ARE present, we always measure fresh since zones depend on inter-block
-      // layout context (cumulative Y, neighboring floating tables/images).
-      if (!floatingZones || floatingZones.length === 0) {
-        const cached = getCachedParagraphMeasure(pBlock, contentWidth);
-        if (cached) return cached;
-      }
-
-      const result = measureParagraph(pBlock, contentWidth, {
-        floatingZones,
-        paragraphYOffset: cumulativeY ?? 0,
-      });
-
-      if (!floatingZones || floatingZones.length === 0) {
-        setCachedParagraphMeasure(pBlock, contentWidth, result);
-      }
-
-      return result;
-    }
-
-    case 'table': {
-      return measureTableBlock(block as TableBlock, contentWidth, measureBlock);
-    }
-
-    case 'image': {
-      const imageBlock = block as ImageBlock;
-      return {
-        kind: 'image',
-        width: imageBlock.width ?? 100,
-        height: imageBlock.height ?? 100,
-      };
-    }
-
-    case 'textBox': {
-      const tb = block as TextBoxBlock;
-      const margins = tb.margins ?? DEFAULT_TEXTBOX_MARGINS;
-      const innerWidth = (tb.width ?? DEFAULT_TEXTBOX_WIDTH) - margins.left - margins.right;
-      const innerMeasures = tb.content.map((p) => measureParagraph(p, innerWidth));
-      const contentHeight = innerMeasures.reduce((sum, m) => sum + m.totalHeight, 0);
-      const totalHeight = tb.height ?? contentHeight + margins.top + margins.bottom;
-      return {
-        kind: 'textBox' as const,
-        width: tb.width ?? DEFAULT_TEXTBOX_WIDTH,
-        height: totalHeight,
-        innerMeasures,
-      };
-    }
-
-    case 'pageBreak':
-      return { kind: 'pageBreak' };
-
-    case 'columnBreak':
-      return { kind: 'columnBreak' };
-
-    case 'sectionBreak':
-      return { kind: 'sectionBreak' };
-
-    default:
-      // Exhaustiveness guard — see FlowBlock in core/layout-engine/types.ts.
-      assertExhaustiveFlowBlock(block, 'react PagedEditor measureBlock');
-  }
-}
-
-/**
- * Measure all blocks with floating image support.
- *
- * Pre-scans all blocks to find floating images and creates exclusion zones.
- * Then measures each block, passing the zones so paragraphs can calculate
- * per-line widths based on vertical overlap with floating images.
- */
-function measureBlocks(blocks: FlowBlock[], contentWidth: number | number[]): Measure[] {
-  const defaultWidth = Array.isArray(contentWidth) ? (contentWidth[0] ?? 0) : contentWidth;
-  // Pre-extract floating image exclusion zones with anchor block indices
-  const floatingZonesWithAnchors = extractFloatingZones(blocks, defaultWidth);
-
-  // Margin-relative zones (positioned relative to page/margin) on the same vertical
-  // position are likely on the same page. Group them and activate all from the earliest
-  // anchor so text wraps around ALL images from the first paragraph onward.
-  // e.g. left-aligned and right-aligned images at margin top should both affect text
-  // starting from the first anchor paragraph, not just the one containing each image.
-  const marginRelative = floatingZonesWithAnchors.filter((z) => z.isMarginRelative);
-  const paragraphRelative = floatingZonesWithAnchors.filter((z) => !z.isMarginRelative);
-
-  // Group margin-relative zones by topY and move all to earliest anchor in group
-  const marginByTopY = new Map<number, FloatingZoneWithAnchor[]>();
-  for (const z of marginRelative) {
-    const group = marginByTopY.get(z.topY) ?? [];
-    group.push(z);
-    marginByTopY.set(z.topY, group);
-  }
-
-  const adjustedZones: FloatingZoneWithAnchor[] = [...paragraphRelative];
-  for (const group of marginByTopY.values()) {
-    const minAnchor = Math.min(...group.map((z) => z.anchorBlockIndex));
-    for (const z of group) {
-      adjustedZones.push({ ...z, anchorBlockIndex: minAnchor });
-    }
-  }
-
-  // Group zones by effective anchor block index
-  const zonesByAnchor = new Map<number, FloatingImageZone[]>();
-  for (const z of adjustedZones) {
-    const existing = zonesByAnchor.get(z.anchorBlockIndex) ?? [];
-    existing.push({
-      leftMargin: z.leftMargin,
-      rightMargin: z.rightMargin,
-      topY: z.topY,
-      bottomY: z.bottomY,
-    });
-    zonesByAnchor.set(z.anchorBlockIndex, existing);
-  }
-
-  const anchorIndices = new Set(adjustedZones.map((z) => z.anchorBlockIndex));
-
-  // Track cumulative Y position for floating zone overlap calculation
-  // Resets when we reach a block with floating images (establishing local page coords)
-  let cumulativeY = 0;
-  let activeZones: FloatingImageZone[] = [];
-
-  return blocks.map((block, blockIndex) => {
-    // Check if this block is an anchor for floating images
-    // If so, reset cumulative Y and replace active zones (old zones from previous
-    // anchors are invalid after the Y reset since their topY/bottomY are in the old
-    // coordinate system)
-    if (anchorIndices.has(blockIndex)) {
-      cumulativeY = 0;
-      activeZones = zonesByAnchor.get(blockIndex) ?? [];
-    }
-
-    const zones = activeZones.length > 0 ? activeZones : undefined;
-
-    try {
-      const blockStart = performance.now();
-      const blockWidth = Array.isArray(contentWidth)
-        ? (contentWidth[blockIndex] ?? defaultWidth)
-        : contentWidth;
-      const measure = measureBlock(block, blockWidth, zones, cumulativeY);
-      const blockTime = performance.now() - blockStart;
-      if (blockTime > 500) {
-        console.warn(
-          `[measureBlocks] Block ${blockIndex} (${block.kind}) took ${Math.round(blockTime)}ms`
-        );
-      }
-
-      // Update cumulative Y for next block
-      if ('totalHeight' in measure) {
-        if (!(block.kind === 'table' && (block as TableBlock).floating)) {
-          cumulativeY += measure.totalHeight;
-        }
-      }
-
-      return measure;
-    } catch (error) {
-      console.error(`[measureBlocks] Error measuring block ${blockIndex} (${block.kind}):`, error);
-      // Return a minimal measure so we don't crash the entire layout
-      return { totalHeight: 20 } as Measure;
-    }
-  });
-}
-
-// HF metrics, visual-bounds helpers, normalizeHeaderFooterMeasureBlocks,
-// and convertHeaderFooterToContent live in
-// `@eigenpal/docx-editor-core/layout-bridge` (headerFooterLayout.ts). This
-// adapter just hands its `measureBlocks` callback into the core helper so
-// the core pipeline runs without dragging in Canvas/font-metric deps.
-
-// Footnote conversion + per-page render items live in core
-// (`@eigenpal/docx-editor-core/layout-bridge`). This adapter just hands
-// its `measureBlocks` callback into the pipeline; no per-renderer
-// shadow stack here anymore.
-
+// Module-scope helpers extracted to per-domain files — see top of file
+// for the import block.
 // =============================================================================
 // COMPONENT
 // =============================================================================

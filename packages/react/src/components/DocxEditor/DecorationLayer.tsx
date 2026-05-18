@@ -28,7 +28,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { EditorState } from 'prosemirror-state';
 import type { Decoration, EditorView } from 'prosemirror-view';
-import { createRenderedDomContext } from '../plugin-api/RenderedDomContext';
+import { createRenderedDomContext } from '../../plugin-api/RenderedDomContext';
 import type { LayoutSelectionGate } from './LayoutSelectionGate';
 
 interface DecorationLayerProps {
