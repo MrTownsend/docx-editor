@@ -16,11 +16,22 @@ import { getTableContext } from '../context';
 import { buildTableGrid, getTargetCellPositions } from './helpers';
 
 export type BorderPreset = 'all' | 'outside' | 'inside' | 'none';
+export type BorderSpec = { style: string; size: number; color: { rgb: string } };
 
-export function setTableBorders(
-  preset: BorderPreset,
-  borderSpec?: { style: string; size: number; color: { rgb: string } }
-): Command {
+// For a given border side, where is the adjacent cell whose facing edge
+// must stay in sync? Used by setCellBorder / setTableBorderColor /
+// setTableBorderWidth to keep edge-symmetric (Google-Docs style) borders.
+const ADJACENT_EDGE: Record<
+  'top' | 'bottom' | 'left' | 'right',
+  { adjSide: 'top' | 'bottom' | 'left' | 'right'; dRow: number; dCol: number }
+> = {
+  top: { adjSide: 'bottom', dRow: -1, dCol: 0 },
+  bottom: { adjSide: 'top', dRow: 1, dCol: 0 },
+  left: { adjSide: 'right', dRow: 0, dCol: -1 },
+  right: { adjSide: 'left', dRow: 0, dCol: 1 },
+};
+
+export function setTableBorders(preset: BorderPreset, borderSpec?: BorderSpec): Command {
   return (state, dispatch) => {
     const context = getTableContext(state);
     if (!context.isInTable || context.tablePos === undefined || !context.table) return false;
@@ -110,58 +121,21 @@ export function setTableBorders(
         const existingBorders = (attrs.borders as Record<string, unknown>) || {};
         setAttrs(pos, { ...attrs, borders: { ...existingBorders, ...cellBorders } });
 
-        // Update adjacent cells' matching edges (edge-based borders like Google Docs)
-        // Top edge → adjacent cell above needs matching bottom
-        if (cellBorders.top) {
-          const adjPos = cellByRC.get(`${info.rowIdx - 1},${info.colIdx}`);
-          if (adjPos !== undefined) {
-            const adj = cellByPos.get(adjPos)!;
-            const adjAttrs = getAttrs(adjPos, adj.node);
-            const adjBorders = (adjAttrs.borders as Record<string, unknown>) || {};
-            setAttrs(adjPos, {
-              ...adjAttrs,
-              borders: { ...adjBorders, bottom: cellBorders.top },
-            });
-          }
-        }
-        // Bottom edge → adjacent cell below needs matching top
-        if (cellBorders.bottom) {
-          const adjPos = cellByRC.get(`${info.rowIdx + 1},${info.colIdx}`);
-          if (adjPos !== undefined) {
-            const adj = cellByPos.get(adjPos)!;
-            const adjAttrs = getAttrs(adjPos, adj.node);
-            const adjBorders = (adjAttrs.borders as Record<string, unknown>) || {};
-            setAttrs(adjPos, {
-              ...adjAttrs,
-              borders: { ...adjBorders, top: cellBorders.bottom },
-            });
-          }
-        }
-        // Left edge → adjacent cell to the left needs matching right
-        if (cellBorders.left) {
-          const adjPos = cellByRC.get(`${info.rowIdx},${info.colIdx - 1}`);
-          if (adjPos !== undefined) {
-            const adj = cellByPos.get(adjPos)!;
-            const adjAttrs = getAttrs(adjPos, adj.node);
-            const adjBorders = (adjAttrs.borders as Record<string, unknown>) || {};
-            setAttrs(adjPos, {
-              ...adjAttrs,
-              borders: { ...adjBorders, right: cellBorders.left },
-            });
-          }
-        }
-        // Right edge → adjacent cell to the right needs matching left
-        if (cellBorders.right) {
-          const adjPos = cellByRC.get(`${info.rowIdx},${info.colIdx + info.colspan}`);
-          if (adjPos !== undefined) {
-            const adj = cellByPos.get(adjPos)!;
-            const adjAttrs = getAttrs(adjPos, adj.node);
-            const adjBorders = (adjAttrs.borders as Record<string, unknown>) || {};
-            setAttrs(adjPos, {
-              ...adjAttrs,
-              borders: { ...adjBorders, left: cellBorders.right },
-            });
-          }
+        // Update adjacent cells' matching edges (Google-Docs style edge sync)
+        for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+          const value = cellBorders[side];
+          if (!value) continue;
+          const adj = ADJACENT_EDGE[side];
+          const adjColIdx = side === 'right' ? info.colIdx + info.colspan : info.colIdx + adj.dCol;
+          const adjPos = cellByRC.get(`${info.rowIdx + adj.dRow},${adjColIdx}`);
+          if (adjPos === undefined) continue;
+          const adjInfo = cellByPos.get(adjPos)!;
+          const adjAttrs = getAttrs(adjPos, adjInfo.node);
+          const adjBorders = (adjAttrs.borders as Record<string, unknown>) || {};
+          setAttrs(adjPos, {
+            ...adjAttrs,
+            borders: { ...adjBorders, [adj.adjSide]: value },
+          });
         }
       }
 
@@ -197,14 +171,6 @@ export function setCellBorder(
       const getAttrs = (p: number, n: PMNode) => modified.get(p) ?? { ...n.attrs };
       const setAttrs = (p: number, a: Record<string, unknown>) => modified.set(p, a);
 
-      // Map of side → adjacent side + row/col offset
-      const adjacentMap: Record<string, { adjSide: string; dRow: number; dCol: number }> = {
-        top: { adjSide: 'bottom', dRow: -1, dCol: 0 },
-        bottom: { adjSide: 'top', dRow: 1, dCol: 0 },
-        left: { adjSide: 'right', dRow: 0, dCol: -1 },
-        right: { adjSide: 'left', dRow: 0, dCol: 1 },
-      };
-
       for (const { pos, node } of cells) {
         const info = cellByPos.get(pos);
         const attrs = getAttrs(pos, node);
@@ -224,7 +190,7 @@ export function setCellBorder(
           const sidesToSync = clearOthers ? allSides : sides;
           for (const s of sidesToSync) {
             const syncValue = (newBorders as Record<string, unknown>)[s];
-            const adj = adjacentMap[s];
+            const adj = ADJACENT_EDGE[s];
             const adjColIdx = s === 'right' ? info.colIdx + info.colspan : info.colIdx + adj.dCol;
             const adjPos = cellByRC.get(`${info.rowIdx + adj.dRow},${adjColIdx}`);
             if (adjPos !== undefined) {
@@ -267,13 +233,6 @@ export function setTableBorderColor(color: string): Command {
       const getAttrs = (p: number, n: PMNode) => modified.get(p) ?? { ...n.attrs };
       const setAttrs = (p: number, a: Record<string, unknown>) => modified.set(p, a);
 
-      const adjacentMap: Record<string, { adjSide: string; dRow: number; dCol: number }> = {
-        top: { adjSide: 'bottom', dRow: -1, dCol: 0 },
-        bottom: { adjSide: 'top', dRow: 1, dCol: 0 },
-        left: { adjSide: 'right', dRow: 0, dCol: -1 },
-        right: { adjSide: 'left', dRow: 0, dCol: 1 },
-      };
-
       for (const { pos, node } of cells) {
         const info = cellByPos.get(pos);
         const attrs = getAttrs(pos, node);
@@ -286,7 +245,7 @@ export function setTableBorderColor(color: string): Command {
 
           // Sync adjacent cell's matching edge
           if (info) {
-            const adj = adjacentMap[side];
+            const adj = ADJACENT_EDGE[side];
             const adjColIdx =
               side === 'right' ? info.colIdx + info.colspan : info.colIdx + adj.dCol;
             const adjPos = cellByRC.get(`${info.rowIdx + adj.dRow},${adjColIdx}`);
@@ -329,13 +288,6 @@ export function setTableBorderWidth(size: number): Command {
       const getAttrs = (p: number, n: PMNode) => modified.get(p) ?? { ...n.attrs };
       const setAttrs = (p: number, a: Record<string, unknown>) => modified.set(p, a);
 
-      const adjacentMap: Record<string, { adjSide: string; dRow: number; dCol: number }> = {
-        top: { adjSide: 'bottom', dRow: -1, dCol: 0 },
-        bottom: { adjSide: 'top', dRow: 1, dCol: 0 },
-        left: { adjSide: 'right', dRow: 0, dCol: -1 },
-        right: { adjSide: 'left', dRow: 0, dCol: 1 },
-      };
-
       for (const { pos, node } of cells) {
         const info = cellByPos.get(pos);
         const attrs = getAttrs(pos, node);
@@ -348,7 +300,7 @@ export function setTableBorderWidth(size: number): Command {
 
           // Sync adjacent cell's matching edge
           if (info) {
-            const adj = adjacentMap[side];
+            const adj = ADJACENT_EDGE[side];
             const adjColIdx =
               side === 'right' ? info.colIdx + info.colspan : info.colIdx + adj.dCol;
             const adjPos = cellByRC.get(`${info.rowIdx + adj.dRow},${adjColIdx}`);

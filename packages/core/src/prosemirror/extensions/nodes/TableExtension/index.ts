@@ -6,21 +6,20 @@
  * Backspace/Delete keymap chain, and the full 32-command surface.
  *
  * NodeSpecs (declarative attrs + parseDOM + toDOM) and the CSS-paste
- * helpers shared by td/th live in ./TableExtension/{specs,paste}.ts. The
- * table-context query / cell-navigation helpers live in
- * ./TableExtension/context.ts. The plugin runtime itself (commands,
- * plugins, keymap) lives under ./TableExtension/runtime/ — one file per
- * command domain (insert, delete, selection, borders, formatting), plus
- * shared helpers and the active-cell decoration plugin.
+ * helpers shared by td/th live in ./{specs,paste}.ts. The table-context
+ * query / cell-navigation helpers live in ./context.ts. The plugin
+ * runtime itself lives under ./commands/ — one file per command domain
+ * (insert, delete, selection, borders, cellFormatting, sizing,
+ * tableStyle), plus shared helpers and the active-cell decoration plugin.
  */
 
-import { createNodeExtension, createExtension } from '../create';
-import type { AnyExtension } from '../types';
-import { tableSpec, tableRowSpec, tableCellSpec, tableHeaderSpec } from './TableExtension/specs';
-import { setupTableRuntime } from './TableExtension/runtime';
+import { createNodeExtension, createExtension } from '../../create';
+import type { AnyExtension } from '../../types';
+import { tableSpec, tableRowSpec, tableCellSpec, tableHeaderSpec } from './specs';
+import { setupTableRuntime } from './commands';
 
-export type { TableContextInfo } from './TableExtension/context';
-export type { BorderPreset } from './TableExtension/runtime';
+export type { TableContextInfo } from './context';
+export type { BorderPreset, BorderSpec } from './commands';
 
 // ============================================================================
 // NODE EXTENSIONS (4 separate ones for schema contribution)
@@ -73,10 +72,4 @@ export function createTableExtensions(): AnyExtension[] {
   ];
 }
 
-// Re-export for backward compat
-export {
-  getTableContext,
-  isInTableCell as isInTable,
-  goToNextCell,
-  goToPrevCell,
-} from './TableExtension/context';
+export { getTableContext, isInTableCell as isInTable, goToNextCell, goToPrevCell } from './context';

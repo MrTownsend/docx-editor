@@ -2,7 +2,7 @@
  * ProseMirror Table Commands — thin re-exports from extension system
  *
  * Table context detection, insert/delete operations, borders, cell styling.
- * All implementations live in extensions/nodes/TableExtension.ts; this file
+ * All implementations live in extensions/nodes/TableExtension/; this file
  * re-exports for backward compatibility.
  */
 

@@ -23,7 +23,7 @@ export default defineConfig([
       'prosemirror/utils/PointerEventHandler': 'src/prosemirror/utils/PointerEventHandler.ts',
       'prosemirror/utils/visualLineNavigation': 'src/prosemirror/utils/visualLineNavigation.ts',
       'prosemirror/extensions/nodes/TableExtension':
-        'src/prosemirror/extensions/nodes/TableExtension.ts',
+        'src/prosemirror/extensions/nodes/TableExtension/index.ts',
       'prosemirror/template/prosemirror-plugin': 'src/prosemirror/template/prosemirror-plugin.ts',
       'docx/index': 'src/docx/index.ts',
       'docx/wrapTypes': 'src/docx/wrapTypes.ts',
