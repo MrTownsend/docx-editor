@@ -114,6 +114,14 @@ interface RenderLineOptions {
 }
 
 /**
+ * Map a paragraph/image alignment to the `justify-content` value used when a
+ * line is laid out as a flex row. `left`, `justify`, and unset all pack left.
+ */
+function alignToJustifyContent(align: string | undefined): string {
+  return align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start';
+}
+
+/**
  * Build a stable key for an inline image run.
  * PM positions are preferred because they uniquely identify the source node.
  */
@@ -301,12 +309,21 @@ export function renderLine(
     const effectiveAlign = imageAlign ?? alignment;
     lineEl.style.display = 'flex';
     lineEl.style.alignItems = 'center';
-    lineEl.style.justifyContent =
-      effectiveAlign === 'center'
-        ? 'center'
-        : effectiveAlign === 'right'
-          ? 'flex-end'
-          : 'flex-start';
+    lineEl.style.justifyContent = alignToJustifyContent(effectiveAlign);
+    lineEl.dataset.flexLine = 'true';
+  } else if (runsForLine.some(isImageRun)) {
+    // Image flowing alongside text/tabs (logo + label header line). Word seats
+    // an inline image as a tall glyph on the text baseline, so baseline-align
+    // the row — the image bottom then lands on the text baseline. The line
+    // height was measured to match (imageH + text descent).
+    lineEl.style.display = 'flex';
+    lineEl.style.alignItems = 'baseline';
+    lineEl.style.justifyContent = alignToJustifyContent(alignment);
+    // Flex blockifies the run spans, so they'd otherwise inherit the line's
+    // image-inflated line-height as their own box height — fattening each
+    // text run to the full band and breaking baseline alignment. Reset to the
+    // font's natural line box; the line div keeps its explicit `height`.
+    lineEl.style.lineHeight = 'normal';
     lineEl.dataset.flexLine = 'true';
   }
 

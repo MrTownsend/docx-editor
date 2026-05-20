@@ -409,6 +409,16 @@ function rotatedBoundingBox(w: number, h: number, deg: number): { w: number; h: 
 /**
  * Render an inline image run (flows with text)
  */
+/**
+ * Apply an inline image's `wp:inline` distT/distB wrap distances as top/bottom
+ * margins. The line measurer folds the same values into the line height, so
+ * the flowed element's margin box matches the reserved space.
+ */
+function applyInlineImageDist(el: HTMLElement, run: ImageRun): void {
+  if (run.distTop) el.style.marginTop = `${run.distTop}px`;
+  if (run.distBottom) el.style.marginBottom = `${run.distBottom}px`;
+}
+
 function renderInlineImageRun(run: ImageRun, doc: Document): HTMLElement {
   const img = doc.createElement('img');
   img.className = `${PARAGRAPH_CLASS_NAMES.run} ${PARAGRAPH_CLASS_NAMES.image}`;
@@ -452,6 +462,7 @@ function renderInlineImageRun(run: ImageRun, doc: Document): HTMLElement {
     img.style.position = 'absolute';
     img.style.left = `${(bbox.w - run.width) / 2}px`;
     img.style.top = `${(bbox.h - run.height) / 2}px`;
+    applyInlineImageDist(wrapper, run);
     applyPmPositions(wrapper, run.pmStart, run.pmEnd);
     wrapper.appendChild(img);
     return wrapper;
@@ -470,6 +481,7 @@ function renderInlineImageRun(run: ImageRun, doc: Document): HTMLElement {
   // baseline/top would land flush with the line edge.)
   img.style.verticalAlign = 'middle';
 
+  applyInlineImageDist(img, run);
   applyPmPositions(img, run.pmStart, run.pmEnd);
 
   return img;

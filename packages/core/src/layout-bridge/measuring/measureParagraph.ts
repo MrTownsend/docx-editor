@@ -490,23 +490,36 @@ export function measureParagraph(
     );
 
     // If an inline image is taller than the text-based line height, the line
-    // grows to fit the image PLUS the parent paragraph's natural line leading.
-    // Word treats an inline image as a tall glyph sitting on the text baseline:
-    // the image extends above the baseline (full ascent), and the line still
-    // reserves the parent font's normal descent + leading below. Without the
-    // extra leading the image renders flush with its containing cell borders
-    // (no visual breathing room when the image is alone in a table cell).
+    // grows to fit the image. Word treats an inline image as a tall glyph
+    // sitting on the text baseline: the image extends above the baseline
+    // (full ascent), and the line reserves the parent font's descent below.
     const finalTypography = { ...typography };
     if (currentLine.maxImageHeightPx > finalTypography.lineHeight) {
-      // Image-only line: line grows to image height plus the parent font's
-      // descent on BOTH sides so the row has visible breathing room above
-      // and below the image (Word's render gives a few px of cell padding
-      // even with tcMar=0). Sibling text cells share the row height, so
-      // their descenders also stay clear of overflow:hidden.
       const imageH = currentLine.maxImageHeightPx;
       const buffer = finalTypography.descent;
-      finalTypography.lineHeight = imageH + buffer * 2;
-      finalTypography.ascent = imageH + buffer;
+      // `fromRun === toRun` means a single-run line — here, the lone image
+      // (the enclosing `if` guarantees a tall image is present). This must
+      // stay in sync with the painter's image-only test in `renderLine`
+      // (`runsForLine.length === 1 && isImageRun(...)`); the two pick paired
+      // line-height / alignment strategies and disagreeing reintroduces the
+      // floating-label bug.
+      if (currentLine.fromRun === currentLine.toRun) {
+        // Image alone on the line: grow to the image height plus the parent
+        // font's descent on BOTH sides so the row has visible breathing room
+        // above and below the image (Word's render gives a few px of cell
+        // padding even with tcMar=0). Sibling text cells share the row
+        // height, so their descenders also stay clear of overflow:hidden.
+        finalTypography.lineHeight = imageH + buffer * 2;
+        finalTypography.ascent = imageH + buffer;
+      } else {
+        // Image flowing with text/tabs (e.g. a logo + label header line):
+        // Word seats the image on the text baseline — the full image height
+        // sits above the baseline and only the text descent is reserved
+        // below, no extra leading above the image. The painter baseline-aligns
+        // the row so the image bottom lands on the text baseline.
+        finalTypography.lineHeight = imageH + buffer;
+        finalTypography.ascent = imageH;
+      }
       // descent stays as text metrics
     }
 
@@ -740,9 +753,14 @@ export function measureParagraph(
       const imageWidth = run.width;
       const imageHeight = run.height;
 
-      // Track image height separately (already in pixels, not points)
-      if (imageHeight > currentLine.maxImageHeightPx) {
-        currentLine.maxImageHeightPx = imageHeight;
+      // The image's vertical footprint in the line includes its wrap
+      // distances (wp:inline distT/distB). These default to 0 for inline
+      // images (unlike the block path's synthetic 6px). The painter applies
+      // them as top/bottom margins on the <img>, so the run's flex baseline
+      // (the margin-box edge) stays consistent with this reserved height.
+      const imageFootprintPx = imageHeight + (run.distTop ?? 0) + (run.distBottom ?? 0);
+      if (imageFootprintPx > currentLine.maxImageHeightPx) {
+        currentLine.maxImageHeightPx = imageFootprintPx;
       }
 
       if (currentLine.width + imageWidth > currentLine.availableWidth + WIDTH_TOLERANCE) {
