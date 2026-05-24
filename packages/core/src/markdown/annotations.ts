@@ -74,7 +74,15 @@ export function wrapComment(
   return `<comment id="${meta.id}"${author}>${inner}</comment>`;
 }
 
-/** Block wrapper for headers/footers. */
+/**
+ * Block wrapper for headers/footers.
+ *
+ * Uses blank lines between the wrapper tag and the inner content so each
+ * side parses as its own HTML block (CommonMark type-7). Markdown inside
+ * (bold, links, lists, images, tables) is then parsed normally by GFM
+ * renderers; the surrounding `<header>` / `<footer>` tags pass through as
+ * raw HTML.
+ */
 export function wrapHeaderFooter(
   ctx: RenderContext,
   kind: 'header' | 'footer',
@@ -82,7 +90,7 @@ export function wrapHeaderFooter(
 ): string {
   if (ctx.opts.annotations === 'strip') return '';
   if (ctx.opts.annotations === 'pandoc') {
-    return `:::${kind}\n${inner}\n:::`;
+    return `:::${kind}\n\n${inner}\n\n:::`;
   }
-  return `<${kind}>\n${inner}\n</${kind}>`;
+  return `<${kind}>\n\n${inner}\n\n</${kind}>`;
 }

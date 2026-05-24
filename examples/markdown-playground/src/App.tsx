@@ -6,8 +6,12 @@ import {
   type MarkdownResult,
   type PagedMarkdownResult,
 } from '@eigenpal/docx-editor-core/markdown';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 
 type Method = 'continuous' | 'paged';
+type View = 'rendered' | 'raw';
 type Tracked = 'clean' | 'annotate';
 type Comments = 'strip' | 'inline' | 'sidecar';
 type Hyperlinks = 'inline' | 'reference';
@@ -40,7 +44,8 @@ function isPaged(r: MarkdownResult | PagedMarkdownResult): r is PagedMarkdownRes
 export function App() {
   const [fileName, setFileName] = useState<string>('');
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
-  const [method, setMethod] = useState<Method>('continuous');
+  const [method, setMethod] = useState<Method>('paged');
+  const [view, setView] = useState<View>('rendered');
   const [opts, setOpts] = useState<Options>(DEFAULTS);
   const [result, setResult] = useState<MarkdownResult | PagedMarkdownResult | null>(null);
   const [error, setError] = useState<string>('');
@@ -54,15 +59,16 @@ export function App() {
     setBuffer(buf);
   }, []);
 
-  // Editor needs a stable buffer reference; cloning avoids the editor and
-  // converter both reading the same ArrayBuffer (the editor's parser detaches it).
+  // The editor parser detaches the ArrayBuffer it consumes, so we hand each
+  // side its own copy. The editor copy is stable per file; the converter
+  // clones a fresh copy *per option change* so re-running the conversion
+  // never re-reads a detached buffer.
   const editorBuffer = useMemo(() => buffer?.slice(0), [buffer]);
-  const converterBuffer = useMemo(() => buffer?.slice(0), [buffer]);
 
-  // Re-run conversion whenever buffer or options change.
   useEffect(() => {
-    if (!converterBuffer) return;
+    if (!buffer) return;
     let cancelled = false;
+    const bytes = new Uint8Array(buffer.slice(0));
     (async () => {
       try {
         setError('');
@@ -71,21 +77,13 @@ export function App() {
           comments: opts.comments,
           hyperlinks: opts.hyperlinks,
           annotations: opts.annotations,
+          footnotes: opts.footnotes,
         };
-        if (method === 'paged') {
-          const r = await toMarkdownPaged(new Uint8Array(converterBuffer), {
-            ...baseOpts,
-            footnotes: opts.footnotes,
-            headerFooter: opts.headerFooter,
-          });
-          if (!cancelled) setResult(r);
-        } else {
-          const r = await toMarkdown(new Uint8Array(converterBuffer), {
-            ...baseOpts,
-            footnotes: opts.footnotes,
-          });
-          if (!cancelled) setResult(r);
-        }
+        const r =
+          method === 'paged'
+            ? await toMarkdownPaged(bytes, { ...baseOpts, headerFooter: opts.headerFooter })
+            : await toMarkdown(bytes, baseOpts);
+        if (!cancelled) setResult(r);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -93,7 +91,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [converterBuffer, method, opts]);
+  }, [buffer, method, opts]);
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
@@ -165,12 +163,30 @@ export function App() {
           </div>
         </div>
         <div className="pane">
-          <div className="pane-header">Markdown output</div>
+          <div className="pane-header">
+            <span>Markdown output</span>
+            <div className="view-tabs">
+              <button
+                type="button"
+                className={view === 'rendered' ? 'active' : ''}
+                onClick={() => setView('rendered')}
+              >
+                Rendered
+              </button>
+              <button
+                type="button"
+                className={view === 'raw' ? 'active' : ''}
+                onClick={() => setView('raw')}
+              >
+                Raw
+              </button>
+            </div>
+          </div>
           <div className="pane-body">
             {error ? (
               <pre className="error">{error}</pre>
             ) : result ? (
-              <MarkdownView result={result} />
+              <MarkdownView result={result} view={view} />
             ) : (
               <div className="drop-empty">no document loaded</div>
             )}
@@ -192,20 +208,45 @@ export function App() {
   );
 }
 
-function MarkdownView({ result }: { result: MarkdownResult | PagedMarkdownResult }) {
+const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [rehypeRaw];
+
+function Rendered({ markdown }: { markdown: string }) {
+  return (
+    <div className="md-rendered">
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
+        {markdown}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function MarkdownView({
+  result,
+  view,
+}: {
+  result: MarkdownResult | PagedMarkdownResult;
+  view: View;
+}) {
   if (isPaged(result)) {
     return (
       <div className="md-pages">
         {result.pages.map((p: { pageNumber: number; markdown: string }) => (
           <div className="md-page" key={p.pageNumber}>
             <div className="md-page-label">Page {p.pageNumber}</div>
-            <pre className="md-page-body">{p.markdown}</pre>
+            <div className="md-page-body">
+              {view === 'rendered' ? <Rendered markdown={p.markdown} /> : <pre>{p.markdown}</pre>}
+            </div>
           </div>
         ))}
       </div>
     );
   }
-  return <pre className="markdown-output">{result.markdown}</pre>;
+  return (
+    <div className="markdown-output">
+      {view === 'rendered' ? <Rendered markdown={result.markdown} /> : <pre>{result.markdown}</pre>}
+    </div>
+  );
 }
 
 interface ToolbarProps {

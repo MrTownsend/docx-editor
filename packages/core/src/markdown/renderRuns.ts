@@ -134,15 +134,27 @@ function renderRunContent(
         break;
       }
       case 'drawing': {
+        // Preferred path: resolve via the package's `rels -> media` chain.
+        // That returns raw bytes, so we can register a stable virtual path
+        // and expose the image in `result.images`.
         const ref = pkg?.relationships?.get(item.image.rId);
         const media = ref ? pkg?.media?.get(ref.target) : undefined;
-        if (!media) {
-          ctx.warnings.push(`image rId=${item.image.rId} not resolvable`);
+        if (media) {
+          const reg = registerImage(ctx, media, item.image, paraId);
+          const alt = reg.alt ? escapeAltText(reg.alt) : '';
+          out += `![${alt}](${reg.virtualPath})`;
           break;
         }
-        const reg = registerImage(ctx, media, item.image, paraId);
-        const alt = reg.alt ? escapeAltText(reg.alt) : '';
-        out += `![${alt}](${reg.virtualPath})`;
+        // Fallback: header/footer images use a separate rels file
+        // (word/_rels/header1.xml.rels) that does not live in
+        // `pkg.relationships`. The parser inlines the bytes into
+        // `image.src` (typically a data URL) — emit that directly.
+        if (item.image.src) {
+          const alt = item.image.alt ?? item.image.title ?? item.image.filename ?? '';
+          out += `![${escapeAltText(alt)}](${item.image.src})`;
+          break;
+        }
+        ctx.warnings.push(`image rId=${item.image.rId} not resolvable`);
         break;
       }
       case 'shape':

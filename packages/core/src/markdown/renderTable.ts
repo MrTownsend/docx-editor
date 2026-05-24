@@ -297,13 +297,18 @@ function renderHtmlRun(
       case 'drawing': {
         const ref = pkg?.relationships?.get(item.image.rId);
         const media = ref ? pkg?.media?.get(ref.target) : undefined;
-        if (!media) {
-          ctx.warnings.push(`image rId=${item.image.rId} not resolvable`);
+        if (media) {
+          const reg = registerImage(ctx, media, item.image, paraId);
+          const alt = reg.alt ? escapeHtml(reg.alt) : '';
+          text += `<img src="${escapeHtml(reg.virtualPath)}" alt="${alt}">`;
           break;
         }
-        const reg = registerImage(ctx, media, item.image, paraId);
-        const alt = reg.alt ? escapeHtml(reg.alt) : '';
-        text += `<img src="${escapeHtml(reg.virtualPath)}" alt="${alt}">`;
+        if (item.image.src) {
+          const alt = escapeHtml(item.image.alt ?? item.image.title ?? item.image.filename ?? '');
+          text += `<img src="${escapeHtml(item.image.src)}" alt="${alt}">`;
+          break;
+        }
+        ctx.warnings.push(`image rId=${item.image.rId} not resolvable`);
         break;
       }
       case 'footnoteRef':

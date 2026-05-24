@@ -176,7 +176,27 @@ function renderPagedSync(
   };
 }
 
-/** Heuristic page splitter: walks blocks, starts a new page on each break signal. */
+/**
+ * Heuristic page splitter. Walks blocks once, starting a new page on each
+ * break signal:
+ *
+ * - `Paragraph.renderedPageBreakBefore`: Word's cached "this paragraph
+ *   starts on a new page" flag (the most reliable signal on docs Word has
+ *   rendered at least once).
+ * - `Paragraph.formatting.pageBreakBefore`: the authored `w:pageBreakBefore`
+ *   property.
+ * - `Paragraph.sectionProperties.sectionStart` of `nextPage` / `evenPage` /
+ *   `oddPage`.
+ * - An explicit `<w:br w:type="page"/>` inside a run.
+ *
+ * Word's common idiom for an authored page break is an empty paragraph
+ * whose only content is the page break run. That paragraph also carries
+ * `renderedPageBreakBefore=true`, and the *next* paragraph carries
+ * `renderedPageBreakBefore=true` too. Naively the splitter would count
+ * three signals for one logical break. We detect "pure break paragraphs"
+ * (no visible text, just a page break) and consume them as transitions
+ * rather than rendering them as their own (empty) page.
+ */
 function splitIntoPages(blocks: BlockContent[]): BlockContent[][] {
   if (!blocks.length) return [[]];
   const pages: BlockContent[][] = [[]];
@@ -192,12 +212,15 @@ function splitIntoPages(blocks: BlockContent[]): BlockContent[][] {
       pendingBreakAfter = false;
     }
     if (block.type === 'paragraph') {
+      // Empty marker paragraphs (only a page break, no visible text) are the
+      // transition itself: queue the break and drop the paragraph. They
+      // would otherwise become a blank "page" of their own.
+      if (isPureBreakParagraph(block)) {
+        pendingBreakAfter = true;
+        continue;
+      }
       if (startsNewPage(block)) startNewPage();
       pages[pages.length - 1].push(block);
-      // A paragraph containing an explicit mid-paragraph page break splits
-      // the document at the *next* paragraph (we keep the source paragraph
-      // whole rather than splitting its inline runs. Line-accurate splits
-      // are reserved for a layout-driven mode.
       if (containsExplicitPageBreak(block)) pendingBreakAfter = true;
     } else {
       pages[pages.length - 1].push(block);
@@ -221,17 +244,73 @@ function containsExplicitPageBreak(para: Paragraph): boolean {
   );
 }
 
+function paragraphVisibleText(para: Paragraph): string {
+  let out = '';
+  for (const item of para.content) {
+    if (item.type !== 'run') continue;
+    for (const r of (item as Run).content) {
+      if (r.type === 'text') out += r.text;
+      else if (r.type === 'symbol') out += r.char;
+    }
+  }
+  return out;
+}
+
+function isPureBreakParagraph(para: Paragraph): boolean {
+  if (!containsExplicitPageBreak(para)) return false;
+  return paragraphVisibleText(para).trim() === '';
+}
+
 function resolveHeaderFooter(
   pkg: DocxPackage,
   pageNumber: number
 ): { header?: HeaderFooter; footer?: HeaderFooter } {
-  const section = pkg.document.sections?.[0];
-  if (!section) return {};
   const isFirstPage = pageNumber === 1;
-  const { headers, footers } = section;
+
+  // Headers/footers live in two places depending on how the doc was parsed:
+  //   1. `Section.headers` / `Section.footers` — keyed by HeaderFooterType
+  //      ('default' | 'first' | 'even'). Often empty in practice.
+  //   2. `DocxPackage.headers` / `DocxPackage.footers` — keyed by relationship
+  //      id (`rId7`, ...). The section's `headerReferences` / `footerReferences`
+  //      map a HeaderFooterType to an rId. This is what every Word-authored
+  //      file populates.
+  //
+  // We try the section-level map first (cheaper, no rId resolution), then
+  // fall back to the package-level map via the section's references.
+  const section = pkg.document.sections?.[0];
+  const sectionProps = section?.properties ?? pkg.document.finalSectionProperties;
+
+  const pickViaRefs = (
+    refs: { type: 'default' | 'first' | 'even'; rId: string }[] | undefined,
+    pool: Map<string, HeaderFooter> | undefined,
+    wantFirst: boolean
+  ): HeaderFooter | undefined => {
+    if (!refs || !pool) return undefined;
+    if (wantFirst) {
+      const first = refs.find((r) => r.type === 'first');
+      const hit = first && pool.get(first.rId);
+      if (hit) return hit;
+    }
+    const def = refs.find((r) => r.type === 'default');
+    return def ? pool.get(def.rId) : undefined;
+  };
+
+  const sectionHeader =
+    (isFirstPage && section?.headers?.get('first')) || section?.headers?.get('default');
+  const sectionFooter =
+    (isFirstPage && section?.footers?.get('first')) || section?.footers?.get('default');
+
   return {
-    header: (isFirstPage && headers?.get('first')) || headers?.get('default'),
-    footer: (isFirstPage && footers?.get('first')) || footers?.get('default'),
+    header:
+      sectionHeader ??
+      pickViaRefs(sectionProps?.headerReferences, pkg.headers, isFirstPage) ??
+      // Last resort: the first header in the package map. Most one-section
+      // documents only have one header.
+      pkg.headers?.values().next().value,
+    footer:
+      sectionFooter ??
+      pickViaRefs(sectionProps?.footerReferences, pkg.footers, isFirstPage) ??
+      pkg.footers?.values().next().value,
   };
 }
 
