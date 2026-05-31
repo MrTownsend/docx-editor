@@ -19,9 +19,36 @@
 
 import type { Node as PMNode } from 'prosemirror-model';
 import { schema } from '../schema';
-import type { Document, Paragraph, Table, StyleDefinitions, Theme } from '../../types/document';
+import type {
+  Document,
+  Paragraph,
+  Table,
+  BlockContent,
+  StyleDefinitions,
+  Theme,
+} from '../../types/document';
 import { createStyleResolver } from '../styles';
 import { paragraphHasPageBreak } from './toProseDoc/paragraph';
+
+/**
+ * Flatten block content for PM conversion, expanding block-level SDTs into
+ * their child blocks. Block SDTs are preserved in the document model for
+ * round-trip (see `BlockSdt`), but are not yet a distinct editable PM node
+ * (Phase 1) — rendering their children inline keeps the content visible and
+ * editable, matching the pre-existing behavior where the wrapper was
+ * flattened at parse time. Nested block SDTs are expanded recursively.
+ */
+function flattenBlockContent(blocks: BlockContent[]): Array<Paragraph | Table> {
+  const out: Array<Paragraph | Table> = [];
+  for (const block of blocks) {
+    if (block.type === 'blockSdt') {
+      out.push(...flattenBlockContent(block.content));
+    } else {
+      out.push(block);
+    }
+  }
+  return out;
+}
 import { convertTable } from './toProseDoc/tables';
 import { convertParagraphWithTextBoxes } from './toProseDoc/textbox';
 
@@ -48,7 +75,7 @@ export interface ToProseDocOptions {
  * @param options - Conversion options including style definitions
  */
 export function toProseDoc(document: Document, options?: ToProseDocOptions): PMNode {
-  const paragraphs = document.package.document.content;
+  const paragraphs = flattenBlockContent(document.package.document.content);
   const nodes: PMNode[] = [];
   const theme = document.package.theme ?? null;
 
@@ -89,14 +116,14 @@ export function toProseDoc(document: Document, options?: ToProseDocOptions): PMN
  * fills in HF tables fall back to the unresolved theme key.
  */
 export function headerFooterToProseDoc(
-  content: Array<Paragraph | Table>,
+  content: BlockContent[],
   options?: ToProseDocOptions & { theme?: Theme | null }
 ): PMNode {
   const nodes: PMNode[] = [];
   const styleResolver = options?.styles ? createStyleResolver(options.styles) : null;
   const theme = options?.theme ?? null;
 
-  for (const block of content) {
+  for (const block of flattenBlockContent(content)) {
     if (block.type === 'paragraph') {
       nodes.push(...convertParagraphWithTextBoxes(block, styleResolver));
     } else if (block.type === 'table') {
@@ -121,7 +148,7 @@ export function headerFooterToProseDoc(
  * tables, images, and fields nested inside a footnote.
  */
 export function footnoteToProseDoc(
-  content: Array<Paragraph | Table>,
+  content: BlockContent[],
   options?: ToProseDocOptions & { theme?: Theme | null }
 ): PMNode {
   return headerFooterToProseDoc(content, options);

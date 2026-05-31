@@ -5,8 +5,7 @@
  */
 
 import type { NumberFormat } from '../lists';
-import type { Paragraph } from './paragraph';
-import type { Table } from './table';
+import type { BlockContent } from './section';
 
 /**
  * Header/footer type
@@ -34,7 +33,7 @@ export interface HeaderFooter {
   /** Header/footer type */
   hdrFtrType: HeaderFooterType;
   /** Content (paragraphs, tables, etc.) */
-  content: (Paragraph | Table)[];
+  content: BlockContent[];
 }
 
 /**
@@ -88,7 +87,7 @@ export interface Footnote {
    * widened to match HeaderFooter / TableCell shape so the body pipeline
    * (toProseDoc → toFlowBlocks) can render them uniformly.
    */
-  content: (Paragraph | Table)[];
+  content: BlockContent[];
 }
 
 /**
@@ -104,5 +103,5 @@ export interface Endnote {
    * Content. Per ECMA-376 §17.11.4 endnotes can hold the same blocks as
    * the body — paragraphs and tables. See note on `Footnote.content`.
    */
-  content: (Paragraph | Table)[];
+  content: BlockContent[];
 }

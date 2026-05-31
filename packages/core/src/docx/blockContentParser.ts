@@ -16,16 +16,18 @@
 
 import type {
   Paragraph,
-  Table,
   Shape,
   ShapeContent,
   Theme,
   RelationshipMap,
   MediaFile,
+  BlockContent,
+  BlockSdt,
 } from '../types/document';
 import type { StyleMap } from './styleParser';
 import type { NumberingMap } from './numberingParser';
-import { findDeep, getChildElements, getLocalName, type XmlElement } from './xmlParser';
+import { findChild, findDeep, getChildElements, getLocalName, type XmlElement } from './xmlParser';
+import { parseSdtProperties } from './sdtProperties';
 import { parseParagraph } from './paragraphParser';
 import { parseTable } from './tableParser';
 import {
@@ -287,8 +289,8 @@ export function parseBlockContent(
   rels: RelationshipMap | null,
   media: Map<string, MediaFile> | null,
   options?: { inHeaderFooter?: boolean }
-): (Paragraph | Table)[] {
-  const content: (Paragraph | Table)[] = [];
+): BlockContent[] {
+  const content: BlockContent[] = [];
   const children = getChildElements(parent);
 
   for (const child of children) {
@@ -310,23 +312,40 @@ export function parseBlockContent(
       const table = parseTable(child, styles, theme, numbering, rels, media, options);
       content.push(table);
     }
-    // Structured Document Tag (w:sdt) - container for content
+    // Structured Document Tag (w:sdt) — preserve as a BlockSdt wrapper so the
+    // content control, its properties, and identity survive the round trip.
     else if (name === 'w:sdt' || name.endsWith(':sdt')) {
-      // Find the content element inside SDT
-      const sdtContent = (child.elements ?? []).find(
-        (el: XmlElement) =>
-          el.type === 'element' && (el.name === 'w:sdtContent' || el.name?.endsWith(':sdtContent'))
-      );
-      if (sdtContent) {
-        // Recursively parse content inside SDT
-        content.push(
-          ...parseBlockContent(sdtContent, styles, theme, numbering, rels, media, options)
-        );
-      }
+      content.push(parseBlockSdt(child, styles, theme, numbering, rels, media, options));
     }
     // Section properties (w:sectPr) - handled separately at body level
     // Skip here as we handle it after content parsing
   }
 
   return content;
+}
+
+/**
+ * Parse a block-level Structured Document Tag (`w:sdt`) into a {@link BlockSdt}.
+ *
+ * Captures the `w:sdtPr`/`w:sdtEndPr` properties (verbatim for round-trip) and
+ * recurses through `parseBlockContent` so nested block SDTs, tables, and
+ * run-level content inside `w:sdtContent` are preserved rather than flattened.
+ */
+function parseBlockSdt(
+  sdt: XmlElement,
+  styles: StyleMap | null,
+  theme: Theme | null,
+  numbering: NumberingMap | null,
+  rels: RelationshipMap | null,
+  media: Map<string, MediaFile> | null,
+  options?: { inHeaderFooter?: boolean }
+): BlockSdt {
+  const sdtPr = findChild(sdt, 'w', 'sdtPr');
+  const sdtEndPr = findChild(sdt, 'w', 'sdtEndPr');
+  const sdtContent = findChild(sdt, 'w', 'sdtContent');
+  const properties = parseSdtProperties(sdtPr, sdtEndPr);
+  const content = sdtContent
+    ? parseBlockContent(sdtContent, styles, theme, numbering, rels, media, options)
+    : [];
+  return { type: 'blockSdt', properties, content };
 }

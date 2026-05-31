@@ -26,6 +26,7 @@ import type {
 import { serializeParagraph } from './paragraphSerializer';
 import { resetAutoIdCounter } from './runSerializer';
 import { serializeTable } from './tableSerializer';
+import { serializeBlockSdt } from './sdtSerializer';
 import { intAttr } from './xmlUtils';
 
 // ============================================================================
@@ -89,6 +90,16 @@ function buildNamespaceDeclarations(): string {
     w: NAMESPACES.w,
     w14: NAMESPACES.w14,
     w15: NAMESPACES.w15,
+    // Modern Word (2016+) extension namespaces. Declared because verbatim
+    // passthrough (e.g. a captured w:sdtPr) can echo w16*/wne-prefixed
+    // children; an undeclared prefix is a fatal XML error that makes Word
+    // offer to repair the file.
+    w16se: NAMESPACES.w16se,
+    w16cid: NAMESPACES.w16cid,
+    w16: NAMESPACES.w16,
+    w16cex: NAMESPACES.w16cex,
+    w16sdtdh: NAMESPACES.w16sdtdh,
+    wne: NAMESPACES.wne,
     wpg: NAMESPACES.wpg,
     wps: NAMESPACES.wps,
   };
@@ -573,13 +584,7 @@ function serializeBlockContent(block: BlockContent): string {
   } else if (block.type === 'table') {
     return serializeTable(block);
   } else if (block.type === 'blockSdt') {
-    // Block-level SDT: wrap content in w:sdt
-    const contentXml = block.content.map((b) => serializeBlockContent(b)).join('');
-    const props = block.properties;
-    const prParts: string[] = [];
-    if (props.alias) prParts.push(`<w:alias w:val="${props.alias}"/>`);
-    if (props.tag) prParts.push(`<w:tag w:val="${props.tag}"/>`);
-    return `<w:sdt><w:sdtPr>${prParts.join('')}</w:sdtPr><w:sdtContent>${contentXml}</w:sdtContent></w:sdt>`;
+    return serializeBlockSdt(block, serializeBlockContent);
   }
   return '';
 }
@@ -632,7 +637,7 @@ export function serializeDocument(doc: Document): string {
 
   // Document element with namespaces
   const nsDecl = buildNamespaceDeclarations();
-  parts.push(`<w:document ${nsDecl} mc:Ignorable="w14 w15 wp14">`);
+  parts.push(`<w:document ${nsDecl} mc:Ignorable="w14 w15 w16se w16cid w16 w16cex w16sdtdh wp14">`);
 
   // Document body
   parts.push('<w:body>');

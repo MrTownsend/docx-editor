@@ -215,7 +215,7 @@ export function serializeInlineSdt(sdt: InlineSdt): string {
         prParts.push('<w:date/>');
       }
       break;
-    case 'dropdown': {
+    case 'dropDownList': {
       const items = (props.listItems ?? [])
         .map(
           (i) =>

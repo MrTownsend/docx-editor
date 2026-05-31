@@ -10,9 +10,10 @@
  * - Content: w:p, w:tbl (same as document body)
  */
 
-import type { HeaderFooter, Paragraph, Table } from '../../types/document';
+import type { BlockContent, HeaderFooter } from '../../types/document';
 import { serializeParagraph } from './paragraphSerializer';
 import { serializeTable } from './tableSerializer';
+import { serializeBlockSdt } from './sdtSerializer';
 
 // Minimal namespaces needed for header/footer XML
 const NAMESPACES: Record<string, string> = {
@@ -28,6 +29,15 @@ const NAMESPACES: Record<string, string> = {
   w: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
   w14: 'http://schemas.microsoft.com/office/word/2010/wordml',
   w15: 'http://schemas.microsoft.com/office/word/2012/wordml',
+  // Modern Word (2016+) extension namespaces — declared so a captured w:sdtPr
+  // replayed verbatim (e.g. w16sdtdh data hash) doesn't reference an
+  // undeclared prefix, which would make Word offer to repair the file.
+  w16se: 'http://schemas.microsoft.com/office/word/2015/wordml/symex',
+  w16cid: 'http://schemas.microsoft.com/office/word/2016/wordml/cid',
+  w16: 'http://schemas.microsoft.com/office/word/2018/wordml',
+  w16cex: 'http://schemas.microsoft.com/office/word/2018/wordml/cex',
+  w16sdtdh: 'http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash',
+  wne: 'http://schemas.microsoft.com/office/word/2006/wordml',
   wpg: 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup',
   wps: 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape',
 };
@@ -39,13 +49,16 @@ function buildNamespaceDeclarations(): string {
 }
 
 /**
- * Serialize a block content item (paragraph or table) for header/footer
+ * Serialize a block content item (paragraph, table, or block SDT) for
+ * header/footer content.
  */
-function serializeBlock(block: Paragraph | Table): string {
+function serializeBlock(block: BlockContent): string {
   if (block.type === 'paragraph') {
     return serializeParagraph(block);
   } else if (block.type === 'table') {
     return serializeTable(block);
+  } else if (block.type === 'blockSdt') {
+    return serializeBlockSdt(block, serializeBlock);
   }
   return '';
 }
