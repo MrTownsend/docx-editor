@@ -90,7 +90,12 @@ function resolveFieldText(run: Run, field?: FieldContext): string {
 /** Text actually drawn for a run, after caps transform. */
 export function effectiveRunText(run: Run, field?: FieldContext): string {
   let text = isTextRun(run) ? run.text : isFieldRun(run) ? resolveFieldText(run, field) : '';
-  if ('allCaps' in run && run.allCaps) text = text.toUpperCase();
+  // allCaps and smallCaps both render as uppercase glyphs. (smallCaps' reduced
+  // cap height for source-lowercase letters is approximated as full caps — pdf
+  // has no font-variant; uppercasing reads far closer to Word than mixed case.)
+  if (('allCaps' in run && run.allCaps) || ('smallCaps' in run && run.smallCaps)) {
+    text = text.toUpperCase();
+  }
   return text;
 }
 

@@ -84,6 +84,13 @@ export function printPdfBlob(blob: Blob): boolean {
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
     iframe.src = url;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      iframe.remove();
+      URL.revokeObjectURL(url);
+    };
     iframe.onload = () => {
       try {
         iframe.contentWindow?.focus();
@@ -91,13 +98,11 @@ export function printPdfBlob(blob: Blob): boolean {
       } catch {
         window.open(url, '_blank');
       }
-      // Keep the iframe/url alive long enough for the print dialog.
-      window.setTimeout(() => {
-        iframe.remove();
-        URL.revokeObjectURL(url);
-      }, 60_000);
     };
     document.body.appendChild(iframe);
+    // Single cleanup timer, independent of `onload` — so the iframe/url are
+    // always reclaimed even if the blob never loads. 60s covers the print dialog.
+    window.setTimeout(cleanup, 60_000);
     return true;
   } catch {
     return false;

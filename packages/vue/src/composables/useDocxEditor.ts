@@ -483,6 +483,7 @@ export function useDocxEditor(options: UseDocxEditorOptions): UseDocxEditorRetur
         firstPageHeaderContent,
         firstPageFooterContent,
         titlePage: hasTitlePg,
+        pageBorders: initialSp?.pageBorders,
         footnotesByPage,
       } as Parameters<typeof renderPages>[2]);
 
@@ -494,6 +495,7 @@ export function useDocxEditor(options: UseDocxEditorOptions): UseDocxEditorRetur
         firstPageHeader: firstPageHeaderContent,
         firstPageFooter: firstPageFooterContent,
         titlePg: hasTitlePg,
+        pageBorders: initialSp?.pageBorders,
       };
 
       // renderPages sets display:flex on the container — fix scrolling

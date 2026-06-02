@@ -31,6 +31,7 @@ export interface SinkLineOptions {
   end: SinkPoint;
   thickness: number;
   color?: RGB;
+  opacity?: number;
   dashArray?: number[];
 }
 

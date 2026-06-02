@@ -20,6 +20,7 @@ export interface BorderLike {
 export interface Stroke {
   thickness: number;
   color: RGB;
+  opacity: number;
   dashArray?: number[];
   /** Draw two parallel lines (Word `double`/`triple`/embossed styles). */
   double: boolean;
@@ -52,11 +53,12 @@ export function strokeForBorder(b: BorderLike | undefined): Stroke | null {
   const thickness = pxToPt(widthPx);
   const c = parseCssColor(b.color);
   const color = c ? rgb(c.r, c.g, c.b) : rgb(0, 0, 0);
+  const opacity = c?.alpha ?? 1;
   let dashArray: number[] | undefined;
   if (style === 'dashed' || style === 'dashsmallgap') dashArray = [thickness * 3, thickness * 2];
   else if (style === 'dotted') dashArray = [thickness, thickness];
   const double = style === 'double' || style === 'triple' || style.startsWith('threed');
-  return { thickness, color, dashArray, double };
+  return { thickness, color, opacity, dashArray, double };
 }
 
 /**
@@ -78,18 +80,22 @@ export function drawBorderLine(
   const len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len;
   const ny = dx / len;
-  const line = (off: number) =>
+  const line = (off: number, thickness: number) =>
     page.drawLine({
       start: { x: a.x + nx * off, y: a.y + ny * off },
       end: { x: z.x + nx * off, y: z.y + ny * off },
-      thickness: s.thickness,
+      thickness,
       color: s.color,
+      opacity: s.opacity,
       dashArray: s.dashArray,
     });
   if (s.double) {
-    line(s.thickness);
-    line(-s.thickness);
+    // Two thin lines whose total span ≈ the declared width (Word draws a double
+    // border as two hairlines within the border weight, not two full-weight ones).
+    const sub = s.thickness / 3;
+    line(sub, sub);
+    line(-sub, sub);
   } else {
-    line(0);
+    line(0, s.thickness);
   }
 }

@@ -22,7 +22,7 @@ import type {
 } from '../layout-engine/types';
 import type { FieldContext } from '../layout-painter/renderParagraph/positionRuns';
 import { pageYToPt, pxToPt } from './coords';
-import { colorToPdf } from './pdfText';
+import { alphaOf, colorToPdf } from './pdfText';
 import { drawBorderLine } from './pdfBorders';
 import { drawParagraphAt } from './pdfParagraph';
 import { drawImageFragment, type ImageEmbedder } from './pdfImage';
@@ -185,6 +185,7 @@ function drawCell(
       width: pxToPt(cellW),
       height: pxToPt(cellH),
       color: colorToPdf(cell.background),
+      opacity: alphaOf(cell.background),
     });
   }
 
@@ -229,6 +230,7 @@ function drawCell(
         pageHpx: ctx.pageHpx,
         fonts: ctx.fonts,
         field: ctx.field,
+        embedder: ctx.embedder,
       });
       contentY += m.totalHeight;
     } else if (blk.kind === 'table' && m.kind === 'table') {

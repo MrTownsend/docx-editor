@@ -30,6 +30,11 @@ describe('pdf/pdfBorders', () => {
     const ys = lines.map((l) => (l.op === 'line' ? l.y1 : 0)).sort((a, b) => a - b);
     expect(ys[0]).toBeLessThan(10);
     expect(ys[1]).toBeGreaterThan(10);
+    // Each sub-line is ~1/3 the single thickness (total span ≈ declared width),
+    // so a double border isn't ~3× heavier than Word's.
+    const singleThickness = strokeForBorder({ style: 'single', width: 1 })!.thickness;
+    const dblThickness = lines[0].op === 'line' ? lines[0].thickness : 0;
+    expect(dblThickness).toBeCloseTo(singleThickness / 3, 4);
   });
 
   test('drawBorderLine draws nothing for a none border', () => {

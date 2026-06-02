@@ -9,8 +9,8 @@
 
 import { degrees, rgb, type PDFDocument, type PDFImage } from 'pdf-lib';
 import type { PageSink } from './pageSink';
-import type { ImageBlock, ImageFragment } from '../layout-engine/types';
-import { pageYToPt, pxToPt } from './coords';
+import type { ImageBlock, ImageFragment, ImageRun, MeasuredLine } from '../layout-engine/types';
+import { baselineFromTop, pageYToPt, pxToPt } from './coords';
 
 const dataUrlMime = (src: string): string => src.match(/^data:([^;,]+)/)?.[1]?.toLowerCase() ?? '';
 const dataUrlBytes = (src: string): Uint8Array => {
@@ -49,6 +49,10 @@ async function reencodeToPng(src: string): Promise<Uint8Array | null> {
 export interface ImageEmbedder {
   /** Embed (or fetch from cache) the image for a src; null if unembeddable. */
   embed(src: string): Promise<PDFImage | null>;
+  /** Pre-embed a set of srcs so they can be drawn synchronously afterwards. */
+  warmUp(srcs: string[]): Promise<void>;
+  /** Cached embed result (valid after warmUp); null if absent/unembeddable. */
+  getSync(src: string): PDFImage | null;
 }
 
 /** Build a src-keyed embedder over one PDFDocument. */
@@ -57,31 +61,35 @@ export function createImageEmbedder(
   onWarning?: (m: string) => void
 ): ImageEmbedder {
   const cache = new Map<string, PDFImage | null>();
-  return {
-    async embed(src: string): Promise<PDFImage | null> {
-      if (cache.has(src)) return cache.get(src) ?? null;
-      let result: PDFImage | null = null;
-      try {
-        const mime = dataUrlMime(src);
-        if (mime === 'image/png') result = await doc.embedPng(dataUrlBytes(src));
-        else if (mime === 'image/jpeg' || mime === 'image/jpg')
-          result = await doc.embedJpg(dataUrlBytes(src));
-        else if (mime === 'image/x-emf' || mime === 'image/x-wmf') {
-          onWarning?.(`image format ${mime} is not embeddable; drew placeholder`);
-          result = null;
-        } else {
-          const png = await reencodeToPng(src);
-          result = png ? await doc.embedPng(png) : null;
-          if (!png)
-            onWarning?.(`could not re-encode image (${mime || 'unknown'}); drew placeholder`);
-        }
-      } catch (e) {
-        onWarning?.(`image embed failed: ${String(e)}`);
+  async function embed(src: string): Promise<PDFImage | null> {
+    if (cache.has(src)) return cache.get(src) ?? null;
+    let result: PDFImage | null = null;
+    try {
+      const mime = dataUrlMime(src);
+      if (mime === 'image/png') result = await doc.embedPng(dataUrlBytes(src));
+      else if (mime === 'image/jpeg' || mime === 'image/jpg')
+        result = await doc.embedJpg(dataUrlBytes(src));
+      else if (mime === 'image/x-emf' || mime === 'image/x-wmf') {
+        onWarning?.(`image format ${mime} is not embeddable; drew placeholder`);
         result = null;
+      } else {
+        const png = await reencodeToPng(src);
+        result = png ? await doc.embedPng(png) : null;
+        if (!png) onWarning?.(`could not re-encode image (${mime || 'unknown'}); drew placeholder`);
       }
-      cache.set(src, result);
-      return result;
+    } catch (e) {
+      onWarning?.(`image embed failed: ${String(e)}`);
+      result = null;
+    }
+    cache.set(src, result);
+    return result;
+  }
+  return {
+    embed,
+    async warmUp(srcs: string[]): Promise<void> {
+      await Promise.all([...new Set(srcs)].map((s) => embed(s)));
     },
+    getSync: (src: string) => cache.get(src) ?? null,
   };
 }
 
@@ -92,18 +100,21 @@ function parseTransform(t?: string): { rotateDeg: number; flipX: boolean } {
   return { rotateDeg: rot ? parseFloat(rot[1]) : 0, flipX: /scaleX\(\s*-1/.test(t) };
 }
 
-export async function drawImageFragment(
+/** Draw an embedded image (or a placeholder) into a px box, honoring rotation. */
+function drawImageBox(
   page: PageSink,
-  block: ImageBlock,
-  fragment: ImageFragment,
+  img: PDFImage | null,
+  xPx: number,
+  yTopPx: number,
+  wPx: number,
+  hPx: number,
   pageHpx: number,
-  embedder: ImageEmbedder
-): Promise<void> {
-  const xPt = pxToPt(fragment.x);
-  const yPt = pageYToPt(fragment.y + fragment.height, pageHpx);
-  const wPt = pxToPt(fragment.width);
-  const hPt = pxToPt(fragment.height);
-  const img = await embedder.embed(block.src);
+  transform?: string
+): void {
+  const xPt = pxToPt(xPx);
+  const yPt = pageYToPt(yTopPx + hPx, pageHpx);
+  const wPt = pxToPt(wPx);
+  const hPt = pxToPt(hPx);
   if (!img) {
     // Placeholder box so the layout still shows where the image is.
     page.drawRectangle({
@@ -117,7 +128,7 @@ export async function drawImageFragment(
     });
     return;
   }
-  const { rotateDeg } = parseTransform(block.transform);
+  const { rotateDeg } = parseTransform(transform);
   if (!rotateDeg) {
     page.drawImage(img, { x: xPt, y: yPt, width: wPt, height: hPt });
     return;
@@ -134,4 +145,65 @@ export async function drawImageFragment(
   const ax = cx - ((wPt / 2) * cos - (hPt / 2) * sin);
   const ay = cy - ((wPt / 2) * sin + (hPt / 2) * cos);
   page.drawImage(img, { x: ax, y: ay, width: wPt, height: hPt, rotate: degrees(-rotateDeg) });
+}
+
+/** Draw a block image fragment. Requires the src to have been warmed up. */
+export function drawImageFragment(
+  page: PageSink,
+  block: ImageBlock,
+  fragment: ImageFragment,
+  pageHpx: number,
+  embedder: ImageEmbedder
+): void {
+  drawImageBox(
+    page,
+    embedder.getSync(block.src),
+    fragment.x,
+    fragment.y,
+    fragment.width,
+    fragment.height,
+    pageHpx,
+    block.transform
+  );
+}
+
+/** Draw an inline image run, seated with its bottom on the text baseline. */
+export function drawInlineImage(
+  page: PageSink,
+  run: ImageRun,
+  xPx: number,
+  lineTopPx: number,
+  line: MeasuredLine,
+  pageHpx: number,
+  embedder: ImageEmbedder
+): void {
+  const h = run.height || 0;
+  const baselinePx = lineTopPx + baselineFromTop(line);
+  drawImageBox(
+    page,
+    embedder.getSync(run.src),
+    xPx,
+    baselinePx - h,
+    run.width || 0,
+    h,
+    pageHpx,
+    run.transform
+  );
+}
+
+/** Collect every image src referenced by a block tree (for warm-up). */
+export function collectImageSrcs(blocks: import('../layout-engine/types').FlowBlock[]): string[] {
+  const srcs: string[] = [];
+  const walk = (bs: import('../layout-engine/types').FlowBlock[]): void => {
+    for (const b of bs) {
+      if (b.kind === 'image') srcs.push(b.src);
+      else if (b.kind === 'paragraph') {
+        for (const r of b.runs) if (r.kind === 'image') srcs.push(r.src);
+      } else if (b.kind === 'table') {
+        for (const row of b.rows) for (const cell of row.cells) walk(cell.blocks);
+      }
+    }
+  };
+  walk(blocks);
+  return srcs;
 }

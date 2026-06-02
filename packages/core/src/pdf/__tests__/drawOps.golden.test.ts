@@ -84,6 +84,45 @@ describe('PDF draw-op golden snapshots (drift tripwire)', () => {
     expect(sink.ops).toMatchSnapshot();
   });
 
+  test('paragraph: inline image + hyperlink + letter spacing + small caps', async () => {
+    const { fonts, doc } = await fixtures();
+    const embedder = createImageEmbedder(doc);
+    // A 1x1 PNG so the inline image embeds and draws (not a placeholder).
+    const png =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    await embedder.warmUp([png]);
+    const runs: Run[] = [
+      { kind: 'text', text: 'LINK', fontSize: 12, hyperlink: { href: 'https://x' } } as Run,
+      { kind: 'text', text: ' spaced', fontSize: 12, letterSpacing: 2 } as Run,
+      { kind: 'image', src: png, width: 10, height: 10 } as Run,
+      { kind: 'text', text: 'caps', fontSize: 12, smallCaps: true } as Run,
+    ];
+    const block: ParagraphBlock = { kind: 'paragraph', id: 2 as never, runs, attrs: {} };
+    const measure: ParagraphMeasure = {
+      kind: 'paragraph',
+      lines: [line(runs, { width: 200 })],
+      totalHeight: 18,
+    };
+    const sink = new RecordingSink();
+    drawParagraphAt({
+      page: sink,
+      block,
+      measure,
+      x: 96,
+      y: 96,
+      width: 400,
+      pageHpx: 1056,
+      fonts,
+      field,
+      embedder,
+    });
+    // Locks: hyperlink underline (a line op), letter-spaced per-char draws,
+    // inline image op, small-caps uppercased text.
+    expect(sink.ops).toMatchSnapshot();
+    expect(sink.ops.some((o) => o.op === 'image')).toBe(true);
+    expect(sink.ops.some((o) => o.op === 'text' && o.text === 'CAPS')).toBe(true);
+  });
+
   test('table: 2x2 with shading, borders, and a vertical merge', async () => {
     const { fonts, doc } = await fixtures();
     const embedder = createImageEmbedder(doc);

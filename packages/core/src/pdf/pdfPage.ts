@@ -23,7 +23,7 @@ import { colorToPdf } from './pdfText';
 import { drawBorderLine, normalizePageBorderSide } from './pdfBorders';
 import { drawParagraphAt, drawParagraphFragment } from './pdfParagraph';
 import { drawTableAt, drawTableFragment } from './pdfTable';
-import { drawImageFragment, type ImageEmbedder } from './pdfImage';
+import { collectImageSrcs, drawImageFragment, type ImageEmbedder } from './pdfImage';
 import { collectFaces, type FaceRef } from './faces';
 import type { FontProvider } from './fontProvider';
 import type { PageBordersInput } from './types';
@@ -47,18 +47,40 @@ export function hfFaces(hf: HeaderFooterContent | undefined): FaceRef[] {
   return hf ? collectFaces(hf.blocks) : [];
 }
 
-/** Faces referenced by every block on a page — for font warm-up. */
-export function pageFaces(page: Page, blockLookup: BlockLookup): FaceRef[] {
+/** Blocks referenced by a page's fragments + its header/footer. */
+function pageBlocks(
+  page: Page,
+  blockLookup: BlockLookup,
+  header?: HeaderFooterContent,
+  footer?: HeaderFooterContent
+): FlowBlock[] {
   const blocks: FlowBlock[] = [];
   for (const fragment of page.fragments) {
     const entry =
       fragment.blockId !== undefined ? blockLookup.get(String(fragment.blockId)) : undefined;
     if (entry) blocks.push(entry.block);
   }
-  return collectFaces(blocks);
+  if (header) blocks.push(...header.blocks);
+  if (footer) blocks.push(...footer.blocks);
+  return blocks;
 }
 
-export async function drawPage(args: DrawPageArgs): Promise<PDFPage> {
+/** Faces referenced by every block on a page — for font warm-up. */
+export function pageFaces(page: Page, blockLookup: BlockLookup): FaceRef[] {
+  return collectFaces(pageBlocks(page, blockLookup));
+}
+
+/** Image srcs referenced by a page (body + header/footer) — for image warm-up. */
+export function pageImageSrcs(
+  page: Page,
+  blockLookup: BlockLookup,
+  header?: HeaderFooterContent,
+  footer?: HeaderFooterContent
+): string[] {
+  return collectImageSrcs(pageBlocks(page, blockLookup, header, footer));
+}
+
+export function drawPage(args: DrawPageArgs): PDFPage {
   const {
     doc,
     page,
@@ -139,13 +161,14 @@ export async function drawPage(args: DrawPageArgs): Promise<PDFPage> {
             pageHpx: hPx,
             fonts,
             field,
+            embedder,
           });
         }
         break;
       }
       case 'image': {
         if (entry?.block.kind === 'image') {
-          await drawImageFragment(pdfPage, entry.block as ImageBlock, fragment, hPx, embedder);
+          drawImageFragment(pdfPage, entry.block as ImageBlock, fragment, hPx, embedder);
         }
         break;
       }
@@ -201,7 +224,18 @@ function drawHfContent(
     const m = hf.measures[i];
     if (!m) continue;
     if (b.kind === 'paragraph' && m.kind === 'paragraph') {
-      drawParagraphAt({ page, block: b, measure: m, x: left, y, width, pageHpx, fonts, field });
+      drawParagraphAt({
+        page,
+        block: b,
+        measure: m,
+        x: left,
+        y,
+        width,
+        pageHpx,
+        fonts,
+        field,
+        embedder,
+      });
       y += m.totalHeight;
     } else if (b.kind === 'table' && m.kind === 'table') {
       drawTableAt({

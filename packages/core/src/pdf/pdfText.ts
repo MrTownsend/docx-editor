@@ -12,7 +12,7 @@ import type { PageSink } from './pageSink';
 import type { Run } from '../layout-engine/types';
 import { parseCssColor } from './cssColor';
 import { canEncode, type FontProvider, type FontStyle } from './fontProvider';
-import { pxToPt } from './coords';
+import { pageYToPt, pxToPt } from './coords';
 
 const BLACK = rgb(0, 0, 0);
 
@@ -84,22 +84,27 @@ export interface DrawRunArgs {
   baselinePt: number;
   /** Advance width of the run in px (for underline/strike/highlight extents). */
   widthPx: number;
-  /** Line ascent in px (for the highlight band); falls back to a size estimate. */
-  ascentPx?: number;
-  /** Line descent in px (for the highlight band); falls back to a size estimate. */
-  descentPx?: number;
+  /** Line box top in px from the page top (for the full-height highlight band). */
+  lineTopPx?: number;
+  /** Line box height in px (highlight spans the whole line, matching the painter). */
+  lineHeightPx?: number;
+  /** Page height in px (to flip the highlight rect into PDF coords). */
+  pageHpx?: number;
   /** Extra pt added to each inter-word space when justifying (0 = none). */
   wordSpacingPt?: number;
   run: Run;
   fonts: FontProvider;
 }
 
+/** Default hyperlink color when the run carries no explicit color (Word's #0563C1). */
+const HYPERLINK_BLUE = rgb(0x05 / 255, 0x63 / 255, 0xc1 / 255);
+
 /**
- * Draw text, optionally widening each inter-word space by `wordSpacingPt` (for
- * justify — pdf-lib's single `drawText` can't, so we draw word-by-word). Returns
- * nothing; throws bubble to the caller's fallback.
+ * Draw a run's glyphs, applying per-glyph letter spacing and/or per-word justify
+ * spacing (pdf-lib's `drawText` supports neither, so we position each unit). A
+ * single `drawText` is used when neither applies (the common, fast path).
  */
-function drawTextJustified(
+function drawRunGlyphs(
   page: PageSink,
   text: string,
   x: number,
@@ -108,21 +113,22 @@ function drawTextJustified(
   font: PDFFont,
   color: RGB,
   opacity: number,
+  letterSpacingPt: number,
   wordSpacingPt: number
 ): void {
-  if (wordSpacingPt <= 0 || !text.includes(' ')) {
+  if (letterSpacingPt === 0 && (wordSpacingPt <= 0 || !text.includes(' '))) {
     page.drawText(text, { x, y, size, font, color, opacity });
     return;
   }
-  const spaceW = font.widthOfTextAtSize(' ', size);
-  const parts = text.split(' ');
+  const spaceW = safeWidth(font, ' ', size);
   let cx = x;
-  for (let i = 0; i < parts.length; i++) {
-    if (parts[i]) {
-      page.drawText(parts[i], { x: cx, y, size, font, color, opacity });
-      cx += font.widthOfTextAtSize(parts[i], size);
+  for (const ch of text) {
+    if (ch === ' ') {
+      cx += spaceW + wordSpacingPt + letterSpacingPt;
+      continue;
     }
-    if (i < parts.length - 1) cx += spaceW + wordSpacingPt;
+    page.drawText(ch, { x: cx, y, size, font, color, opacity });
+    cx += safeWidth(font, ch, size) + letterSpacingPt;
   }
 }
 
@@ -143,29 +149,48 @@ export function drawTextRun(args: DrawRunArgs): void {
   const sizePt = isSuper || isSub ? basePt * 0.75 : basePt;
   const shiftPt = isSuper ? basePt * 0.33 : isSub ? -basePt * 0.18 : 0;
 
-  const color = colorToPdf('color' in run ? run.color : undefined);
-  const opacity = alphaOf('color' in run ? run.color : undefined);
-  const widthPt = pxToPt(widthPx);
+  // Hyperlinks with no explicit run color/underline get Word's default blue +
+  // underline (the painter injects this; it's not in the model's color/underline).
+  const link = 'hyperlink' in run ? run.hyperlink : undefined;
+  const linkDefault = !!link && !link.noDefaultStyle;
+  const explicitColor = 'color' in run ? run.color : undefined;
+  const color = explicitColor
+    ? colorToPdf(explicitColor)
+    : linkDefault
+      ? HYPERLINK_BLUE
+      : colorToPdf(undefined);
+  const opacity = alphaOf(explicitColor);
+  const letterSpacingPt =
+    'letterSpacing' in run && run.letterSpacing ? pxToPt(run.letterSpacing) : 0;
+  const wordSpacingPt = args.wordSpacingPt ?? 0;
 
-  // Highlight background (w:highlight) — drawn behind the glyphs, spanning the
-  // line band (ascent above baseline, descent below).
+  // Decoration extent = the run's box minus any trailing-space widening, so a
+  // justified run's underline/strike stops at the last glyph, not in the gap.
+  const trailingSpaces = text.length - text.trimEnd().length;
+  const spaceAdvPt = trailingSpaces > 0 ? safeWidth(face, ' ', sizePt) : 0;
+  const decorWidthPt = Math.max(
+    0,
+    pxToPt(widthPx) - trailingSpaces * (spaceAdvPt + wordSpacingPt + letterSpacingPt)
+  );
+
+  // Highlight background (w:highlight) — spans the full LINE box (matching the
+  // painter, which pads the highlight to line height), not just the glyph band.
   const highlight = 'highlight' in run ? run.highlight : undefined;
   const hlParsed = highlight ? parseCssColor(highlight) : undefined;
-  if (hlParsed) {
-    const ascentPt = pxToPt(args.ascentPx ?? basePt * 1.2);
-    const descentPt = pxToPt(args.descentPx ?? basePt * 0.35);
+  if (hlParsed && args.lineTopPx !== undefined && args.lineHeightPx !== undefined) {
     page.drawRectangle({
       x: xPt,
-      y: baselinePt - descentPt,
-      width: widthPt,
-      height: ascentPt + descentPt,
+      y: pageYToPt(args.lineTopPx + args.lineHeightPx, args.pageHpx ?? 0),
+      width: decorWidthPt,
+      height: pxToPt(args.lineHeightPx),
       color: rgb(hlParsed.r, hlParsed.g, hlParsed.b),
+      opacity: hlParsed.alpha,
     });
   }
 
   const y = baselinePt + shiftPt;
   try {
-    drawTextJustified(page, text, xPt, y, sizePt, face, color, opacity, args.wordSpacingPt ?? 0);
+    drawRunGlyphs(page, text, xPt, y, sizePt, face, color, opacity, letterSpacingPt, wordSpacingPt);
   } catch {
     // The chosen face can't encode some glyph. Try the Unicode fallback; if even
     // that can't (no Unicode face was bundled), drop the un-encodable glyphs so
@@ -175,31 +200,39 @@ export function drawTextRun(args: DrawRunArgs): void {
     if (safe) page.drawText(safe, { x: xPt, y, size: sizePt, font: fb, color, opacity });
   }
 
-  // Underline.
+  // Underline (explicit, or default for hyperlinks).
   const underline = 'underline' in run ? run.underline : undefined;
-  if (underline) {
+  if (underline || linkDefault) {
     const uColor =
       typeof underline === 'object' && underline.color ? colorToPdf(underline.color) : color;
     const thickness = Math.max(0.5, sizePt * 0.06);
-    const y = baselinePt + shiftPt - sizePt * 0.12;
-    page.drawLine({ start: { x: xPt, y }, end: { x: xPt + widthPt, y }, thickness, color: uColor });
+    const uy = baselinePt + shiftPt - sizePt * 0.12;
+    page.drawLine({
+      start: { x: xPt, y: uy },
+      end: { x: xPt + decorWidthPt, y: uy },
+      thickness,
+      color: uColor,
+      opacity,
+    });
     if (typeof underline === 'object' && underline.style === 'double') {
       page.drawLine({
-        start: { x: xPt, y: y - thickness * 1.5 },
-        end: { x: xPt + widthPt, y: y - thickness * 1.5 },
+        start: { x: xPt, y: uy - thickness * 1.5 },
+        end: { x: xPt + decorWidthPt, y: uy - thickness * 1.5 },
         thickness,
         color: uColor,
+        opacity,
       });
     }
   }
   // Strikethrough.
   if ('strike' in run && run.strike) {
-    const y = baselinePt + shiftPt + sizePt * 0.28;
+    const sy = baselinePt + shiftPt + sizePt * 0.28;
     page.drawLine({
-      start: { x: xPt, y },
-      end: { x: xPt + widthPt, y },
+      start: { x: xPt, y: sy },
+      end: { x: xPt + decorWidthPt, y: sy },
       thickness: Math.max(0.5, sizePt * 0.06),
       color,
+      opacity,
     });
   }
 }

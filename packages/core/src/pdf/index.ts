@@ -17,7 +17,7 @@ import { PDFDocument } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { GoogleFontProvider, type FontProvider } from './fontProvider';
 import { createImageEmbedder } from './pdfImage';
-import { drawPage, hfFaces, pageFaces } from './pdfPage';
+import { drawPage, hfFaces, pageFaces, pageImageSrcs } from './pdfPage';
 import type { ExportToPdfInput, ExportToPdfOptions } from './types';
 
 export type { ExportToPdfInput, ExportToPdfOptions, PageBordersInput } from './types';
@@ -72,10 +72,12 @@ export async function exportToPdf(input: ExportToPdfInput): Promise<Blob> {
     const page = layout.pages[i];
     const header = input.headerByPage?.(page.number);
     const footer = input.footerByPage?.(page.number);
-    // Warm up every face this page (and its header/footer) references so
-    // positioning uses the embedded metric synchronously (run-x == glyph advance).
+    // Warm up every face + image this page (and its header/footer) references so
+    // positioning + drawing run synchronously (run-x == glyph advance; inline
+    // images draw without an async hop).
     await fonts.warmUp([...pageFaces(page, blockLookup), ...hfFaces(header), ...hfFaces(footer)]);
-    await drawPage({
+    await embedder.warmUp(pageImageSrcs(page, blockLookup, header, footer));
+    drawPage({
       doc,
       page,
       blockLookup,

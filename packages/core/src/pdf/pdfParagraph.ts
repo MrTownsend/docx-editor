@@ -21,8 +21,10 @@ import {
   type FieldContext,
 } from '../layout-painter/renderParagraph/positionRuns';
 import { baselineFromTop, pageYToPt, pxToPt, textBaselinePt } from './coords';
-import { colorToPdf, drawTextRun, faceFor, safeWidth } from './pdfText';
+import { alphaOf, colorToPdf, drawTextRun, faceFor, safeWidth } from './pdfText';
 import { drawBorderLine } from './pdfBorders';
+import { drawInlineImage, type ImageEmbedder } from './pdfImage';
+import { getListMarkerInlineWidth } from '../layout-bridge/measuring/listMarkerWidth';
 import type { FontProvider } from './fontProvider';
 
 const LEADER_CHAR: Record<string, string> = {
@@ -41,6 +43,7 @@ export interface DrawParagraphArgs {
   pageHpx: number;
   fonts: FontProvider;
   field: FieldContext;
+  embedder?: ImageEmbedder;
 }
 
 export interface DrawParagraphAtArgs {
@@ -59,11 +62,13 @@ export interface DrawParagraphAtArgs {
   pageHpx: number;
   fonts: FontProvider;
   field: FieldContext;
+  /** For inline images inside the paragraph (warmed-up embedder). */
+  embedder?: ImageEmbedder;
 }
 
 /** Draw a paragraph's lines at an explicit (x, y, width). Returns the y after the last line. */
 export function drawParagraphAt(args: DrawParagraphAtArgs): number {
-  const { page, block, measure, x, y, width, pageHpx, fonts, field } = args;
+  const { page, block, measure, x, y, width, pageHpx, fonts, field, embedder } = args;
   const fromLine = args.fromLine ?? 0;
   const toLine = args.toLine ?? measure.lines.length;
   const a = block.attrs;
@@ -95,11 +100,23 @@ export function drawParagraphAt(args: DrawParagraphAtArgs): number {
       width: pxToPt(width),
       height: pxToPt(drawnHeight),
       color: colorToPdf(a.shading),
+      opacity: alphaOf(a.shading),
     });
   }
   if (a?.borders) drawParagraphBorders(page, a.borders, x, y, width, drawnHeight, pageHpx);
 
   const hasMarker = !!a?.listMarker && !a?.listMarkerHidden;
+  // For a hanging list the marker sits in the hung area and body text starts at
+  // the left indent (firstLineIndent → 0). For a NON-hanging list the measurer
+  // reserved `getListMarkerInlineWidth` on the first line, so body text must
+  // start that much past the marker (else marker and text overlap).
+  const hanging = (indent.hanging ?? 0) > 0;
+  const markerSlot = hasMarker && !hanging ? getListMarkerInlineWidth(block) : 0;
+  const markerFirstLineIndent = hasMarker
+    ? hanging
+      ? 0
+      : firstLineIndentPx + markerSlot
+    : firstLineIndentPx;
   let lineTop = y;
   for (let li = fromLine; li < toLine; li++) {
     const line = measure.lines[li];
@@ -115,7 +132,7 @@ export function drawParagraphAt(args: DrawParagraphAtArgs): number {
       paragraphEndsWithLineBreak: false,
       tabStops: a?.tabs,
       leftIndentPx: indentLeft,
-      firstLineIndentPx: hasMarker && isFirst ? 0 : firstLineIndentPx,
+      firstLineIndentPx: isFirst ? markerFirstLineIndent : firstLineIndentPx,
       lineRightEdgePx,
       field,
       measureText,
@@ -155,12 +172,15 @@ export function drawParagraphAt(args: DrawParagraphAtArgs): number {
           xPt,
           baselinePt: textBaselinePt(lineTop, line, pageHpx, shift),
           widthPx: pr.width,
-          ascentPx: line.ascent,
-          descentPx: line.descent,
+          lineTopPx: lineTop,
+          lineHeightPx: line.lineHeight,
+          pageHpx,
           wordSpacingPt: pr.kind === 'text' ? pxToPt(positioned.wordSpacingPx) : 0,
           run: pr.run,
           fonts,
         });
+      } else if (pr.kind === 'image' && embedder && pr.run.kind === 'image') {
+        drawInlineImage(page, pr.run, x + pr.x, lineTop, line, pageHpx, embedder);
       } else if (pr.kind === 'tab' && pr.tabLeader && pr.tabLeader !== 'none') {
         drawLeader(page, pr.tabLeader, xPt, pr.width, lineTop, line, pageHpx, fonts, pr.run);
       }
@@ -171,11 +191,12 @@ export function drawParagraphAt(args: DrawParagraphAtArgs): number {
 }
 
 export function drawParagraphFragment(args: DrawParagraphArgs): void {
-  const { page, block, measure, fragment, pageHpx, fonts, field } = args;
+  const { page, block, measure, fragment, pageHpx, fonts, field, embedder } = args;
   drawParagraphAt({
     page,
     block,
     measure,
+    embedder,
     x: fragment.x,
     y: fragment.y,
     width: fragment.width,
@@ -219,8 +240,9 @@ function drawLeader(
 ): void {
   const ch = LEADER_CHAR[leader] ?? '.';
   const size = ('fontSize' in run && run.fontSize) || 11;
-  const face = fonts.getFontSync('Calibri', {});
-  const chW = face.widthOfTextAtSize(ch, size);
+  // Use the run's own face (leader glyph metrics differ per font).
+  const face = faceFor(run, ch, fonts);
+  const chW = safeWidth(face, ch, size);
   if (chW <= 0) return;
   const count = Math.max(0, Math.floor(pxToPt(widthPx) / chW));
   if (count === 0) return;
