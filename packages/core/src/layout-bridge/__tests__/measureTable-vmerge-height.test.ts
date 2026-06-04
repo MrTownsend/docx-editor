@@ -73,4 +73,45 @@ describe('measureTable vertical-merge row heights (Word fidelity)', () => {
     // Total region equals the merged content height.
     expect(m.rows[0].height + m.rows[1].height + m.rows[2].height).toBe(7 * LINE);
   });
+
+  it('collapses adjacent-paragraph spacing within a cell (not additive)', () => {
+    const SP = 8; // before == after on every paragraph
+    // A measureBlock whose paragraph height bundles before + lines + after,
+    // like the real measureParagraph.
+    const para = (id: string): ParagraphBlock =>
+      ({
+        kind: 'paragraph',
+        id,
+        runs: [{ kind: 'text', text: id }],
+        attrs: { spacing: { before: SP, after: SP } },
+      }) as unknown as ParagraphBlock;
+    const mb = (): Measure => ({
+      kind: 'paragraph',
+      lines: [
+        {
+          fromRun: 0,
+          fromChar: 0,
+          toRun: 0,
+          toChar: 0,
+          width: 10,
+          ascent: 16,
+          descent: 4,
+          lineHeight: LINE,
+        },
+      ],
+      totalHeight: SP + LINE + SP, // before + 1 line + after
+    });
+    const block = {
+      kind: 'table',
+      id: 't',
+      columnWidths: [100],
+      rows: [{ id: 'r', cells: [{ id: 'c', blocks: [para('a'), para('b'), para('c')] }] }],
+    } as unknown as TableBlock;
+
+    const m = measureTableBlock(block, 100, mb);
+    // Collapse + trailing after (painter renders it as paddingBottom):
+    //   before(8) + line(20) + max(8,8)=8 + line(20) + 8 + line(20) + after(8) = 92.
+    // Additive (the old bug) would have been 3 * (8 + 20 + 8) = 108.
+    expect(m.rows[0].height).toBe(SP + LINE + SP + LINE + SP + LINE + SP);
+  });
 });

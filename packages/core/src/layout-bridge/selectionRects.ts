@@ -26,6 +26,7 @@ import type {
 import { getHeaderRowsHeight } from '../layout-engine/index';
 
 import { measureRun, type FontStyle } from './measuring/measureContainer';
+import { layoutCellContent } from './cellBlockLayout';
 
 import { getPageTop } from './hitTest';
 
@@ -405,15 +406,32 @@ export function selectionToRects(
         const tableMeasure = measure as TableMeasure;
         const tableFragment = fragment as TableFragment;
 
-        // Account for repeated header rows in continuation fragments
+        // Mirror the painter's windowing (renderTableFragment): the fragment
+        // shows a vertical slice of the table. Rows are positioned at
+        // `headerHeight + (rowTop - winTop)` and clipped to the visible window —
+        // without this, a row split across pages draws its rects in BOTH
+        // fragments (and into the inter-page gap). Round row offsets like the
+        // painter's buildRowYPositions so highlights sit on the rendered lines.
+        const rowTops: number[] = [];
+        let acc = 0;
+        for (let r = 0; r < tableMeasure.rows.length; r++) {
+          rowTops.push(Math.round(acc));
+          acc += tableMeasure.rows[r]?.height ?? 0;
+        }
+        rowTops.push(Math.round(acc));
+
         const hdrCount = tableFragment.headerRowCount ?? 0;
-        const headerOffset =
+        const headerHeight =
           hdrCount > 0 && tableFragment.continuesFromPrev
             ? getHeaderRowsHeight(tableMeasure, hdrCount)
             : 0;
+        const winTop = (rowTops[tableFragment.fromRow] ?? 0) + (tableFragment.topClip ?? 0);
+        const visibleHeight =
+          tableFragment.bottomClip !== undefined
+            ? Math.round(tableFragment.height)
+            : headerHeight + ((rowTops[tableFragment.toRow] ?? 0) - winTop);
+        const toWindowY = (fullY: number): number => headerHeight + (fullY - winTop);
 
-        // Walk through visible rows (start after header offset)
-        let rowY = headerOffset;
         for (
           let rowIndex = tableFragment.fromRow;
           rowIndex < tableFragment.toRow && rowIndex < tableBlock.rows.length;
@@ -422,6 +440,7 @@ export function selectionToRects(
           const row = tableBlock.rows[rowIndex];
           const rowMeasure = tableMeasure.rows[rowIndex];
           if (!row || !rowMeasure) continue;
+          const rowTopFull = rowTops[rowIndex] ?? 0;
 
           // Walk through cells
           let cellX = 0;
@@ -430,7 +449,10 @@ export function selectionToRects(
             const cellMeasure = rowMeasure.cells[cellIndex];
             if (!cell || !cellMeasure) continue;
 
-            // Check each paragraph in the cell
+            const padTop = cell.padding?.top ?? 0;
+            // Collapsed line geometry, same model as the painter / row-break.
+            const cellLayout = layoutCellContent(cell.blocks, cellMeasure.blocks, padTop);
+
             for (let blockIdx = 0; blockIdx < cell.blocks.length; blockIdx++) {
               const cellBlock = cell.blocks[blockIdx];
               const cellBlockMeasure = cellMeasure.blocks[blockIdx];
@@ -440,6 +462,7 @@ export function selectionToRects(
 
               const paragraphBlock = cellBlock as ParagraphBlock;
               const paragraphMeasure = cellBlockMeasure as ParagraphMeasure;
+              const lineTops = cellLayout.lineTops[blockIdx] ?? [];
 
               // Find lines that intersect with selection
               const intersectingLines = findLinesInRange(
@@ -449,7 +472,6 @@ export function selectionToRects(
                 selTo
               );
 
-              let blockY = 0;
               for (const { line, index } of intersectingLines) {
                 const range = computeLinePmRange(paragraphBlock, line);
                 if (range.pmStart === undefined || range.pmEnd === undefined) continue;
@@ -457,6 +479,12 @@ export function selectionToRects(
                 const sliceFrom = Math.max(range.pmStart, selFrom);
                 const sliceTo = Math.min(range.pmEnd, selTo);
                 if (sliceFrom >= sliceTo) continue;
+
+                // Map this line into the fragment's window; skip lines that fall
+                // outside it (shown on an adjacent fragment).
+                const windowY = toWindowY(rowTopFull + (lineTops[index] ?? 0));
+                if (windowY + line.lineHeight <= headerHeight) continue;
+                if (windowY >= visibleHeight) continue;
 
                 const charOffsetFrom = pmPosToCharOffset(paragraphBlock, line, sliceFrom);
                 const charOffsetTo = pmPosToCharOffset(paragraphBlock, line, sliceTo);
@@ -469,24 +497,18 @@ export function selectionToRects(
                 );
                 const endX = charOffsetToX(paragraphBlock, line, charOffsetTo, cellMeasure.width);
 
-                const lineY = lineHeightBefore(paragraphMeasure, index);
-
                 rects.push({
                   x: tableFragment.x + cellX + Math.min(startX, endX),
-                  y: tableFragment.y + rowY + blockY + lineY + pageTopY,
+                  y: tableFragment.y + windowY + pageTopY,
                   width: Math.max(1, Math.abs(endX - startX)),
                   height: line.lineHeight,
                   pageIndex,
                 });
               }
-
-              blockY += paragraphMeasure.totalHeight;
             }
 
             cellX += cellMeasure.width;
           }
-
-          rowY += rowMeasure.height;
         }
       }
 

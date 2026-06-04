@@ -360,6 +360,41 @@ export interface DomSelectionRect {
   pageIndex: number;
 }
 
+/** A rect whose height drops below this after clipping is treated as fully hidden. */
+const MIN_VISIBLE_RECT = 0.5;
+
+/**
+ * Vertically clip a client rect to the enclosing page-fragment table's visible
+ * box. A table that breaks across a page sits in a `.layout-table` with
+ * `overflow:hidden` and `height = visibleHeight`; getClientRects() still reports
+ * the geometry of lines that are visually clipped (off the page / in the
+ * inter-page gap), so selection highlights must be clipped to the same box.
+ *
+ * Uses `.layout-table:not(.layout-nested-table)` because only the page-fragment
+ * table carries the window clip — the inner nested table has no overflow:hidden.
+ * Clips vertically only (the gap bug is vertical; horizontal clipping could trim
+ * change bars on tracked-change tables that set overflow-x: visible).
+ *
+ * Returns null when the rect is fully outside the window.
+ */
+export function clipRectToTableWindow(
+  spanEl: Element,
+  rect: {
+    readonly left: number;
+    readonly top: number;
+    readonly right: number;
+    readonly bottom: number;
+  }
+): { left: number; top: number; right: number; bottom: number } | null {
+  const clipEl = spanEl.closest('.layout-table:not(.layout-nested-table)');
+  if (!clipEl) return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+  const clip = clipEl.getBoundingClientRect();
+  const top = Math.max(rect.top, clip.top);
+  const bottom = Math.min(rect.bottom, clip.bottom);
+  if (bottom - top <= MIN_VISIBLE_RECT) return null;
+  return { left: rect.left, top, right: rect.right, bottom };
+}
+
 export function getSelectionRectsFromDom(
   container: HTMLElement,
   from: number,
@@ -409,11 +444,13 @@ export function getSelectionRectsFromDom(
     const pageIndex = pageEl ? Number(pageEl.dataset.pageNumber || 1) - 1 : 0;
 
     for (const clientRect of Array.from(clientRects)) {
+      const clipped = clipRectToTableWindow(spanEl, clientRect);
+      if (!clipped) continue;
       rects.push({
-        x: clientRect.left - overlayRect.left,
-        y: clientRect.top - overlayRect.top,
-        width: clientRect.width,
-        height: clientRect.height,
+        x: clipped.left - overlayRect.left,
+        y: clipped.top - overlayRect.top,
+        width: clipped.right - clipped.left,
+        height: clipped.bottom - clipped.top,
         pageIndex,
       });
     }

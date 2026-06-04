@@ -8,6 +8,19 @@
 export function clickToPositionDom(container: HTMLElement, clientX: number, clientY: number, zoom?: number): number | null;
 
 // @public
+export function clipRectToTableWindow(spanEl: Element, rect: {
+    readonly left: number;
+    readonly top: number;
+    readonly right: number;
+    readonly bottom: number;
+}): {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+} | null;
+
+// @public
 export interface DomCaretPosition {
     // (undocumented)
     height: number;

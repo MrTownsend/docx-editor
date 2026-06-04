@@ -12,40 +12,9 @@
  * line that still fits.
  */
 
-import type { ParagraphBlock, ParagraphMeasure, TableBlock, TableMeasure } from './types';
+import type { TableBlock, TableMeasure } from './types';
 import { resolveCellGrid } from '../layout-bridge/tableWidthUtils';
-
-/** Cumulative y of each line bottom within a single cell's content. */
-function cellLineBottoms(
-  cellBlocks: ParagraphBlock[] | undefined,
-  blockMeasures: { kind: string; lines?: ParagraphMeasure['lines']; totalHeight?: number }[],
-  padTop: number
-): number[] {
-  // Mirror measureTable's cell-height model: each block contributes
-  // before + lines + after with NO inter-paragraph collapse (paragraphMeasure
-  // totalHeight already bundles before/after). Keeping the same model means the
-  // line bottoms line up with the row height the paginator splits against.
-  const bottoms: number[] = [];
-  let y = padTop;
-  for (let i = 0; i < blockMeasures.length; i++) {
-    const measure = blockMeasures[i];
-    if (measure?.kind === 'paragraph' && measure.lines) {
-      const spacing = cellBlocks?.[i]?.attrs?.spacing;
-      y += spacing?.before ?? 0;
-      for (const line of measure.lines) {
-        y += line.floatSkipBefore ?? 0;
-        y += line.lineHeight;
-        bottoms.push(y);
-      }
-      y += spacing?.after ?? 0;
-    } else if (measure && typeof measure.totalHeight === 'number') {
-      // Nested table / non-paragraph: treat as one atomic block (break only at its bottom).
-      y += measure.totalHeight;
-      bottoms.push(y);
-    }
-  }
-  return bottoms;
-}
+import { layoutCellContent } from '../layout-bridge/cellBlockLayout';
 
 /**
  * Precomputed break geometry for a table.
@@ -99,15 +68,11 @@ export function buildTableRowBreakInfo(
       if (!sourceCell || !measuredCell) continue;
       // OOXML/TableNormal default top padding is 0 (matches measureTable).
       const padTop = sourceCell.padding?.top ?? 0;
-      const bottoms = cellLineBottoms(
-        sourceCell.blocks as ParagraphBlock[] | undefined,
-        measuredCell.blocks,
-        padTop
-      );
+      const { flatBottoms } = layoutCellContent(sourceCell.blocks, measuredCell.blocks, padTop);
       // Map cell-content y (relative to the cell/region top at rowTops[startRow])
       // into this row's coordinate space (relative to rowTops[r]).
       const shift = rowTops[r] - rowTops[g.rowIndex];
-      for (const b of bottoms) {
+      for (const b of flatBottoms) {
         const off = b - shift;
         if (off > 0 && off < rowHeight) offsets.add(off);
       }

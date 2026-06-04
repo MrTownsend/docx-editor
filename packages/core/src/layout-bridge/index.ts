@@ -61,6 +61,7 @@ export type { PositionResult } from './clickToPosition';
 export {
   clickToPositionDom as mouseToPosition,
   clickToPositionDom,
+  clipRectToTableWindow,
   getSelectionRectsFromDom,
   getCaretPositionFromDom,
 } from './clickToPositionDom';

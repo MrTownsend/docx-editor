@@ -158,17 +158,30 @@ export function measureTableBlock(
     for (let cellIdx = 0; cellIdx < row.cells.length; cellIdx++) {
       const cell = row.cells[cellIdx];
       const sourceCell = sourceRowCells?.[cellIdx];
-      // `paragraphMeasure.totalHeight` already includes spacing.before /
-      // spacing.after; just sum the block heights. Adjacent-paragraph
-      // collapse rules don't apply across the cell-content boundary, so this
-      // matches Word's per-cell layout.
+      // Stack the cell's blocks exactly as the painter (renderCellContent) does:
+      // adjacent paragraphs' after/before spacing collapses to the larger of the
+      // two (CSS margin-collapse — the same rule the body paginator uses). The
+      // measured paragraph height already bundles before+after, so strip them
+      // and re-add a single collapsed gap. Summing them additively here would
+      // over-measure the cell (and the row), so the painter's clip/break offsets
+      // would no longer line up with the rendered lines (text cut mid-line at a
+      // page break).
       let contentHeight = 0;
+      let prevAfter = 0;
       for (let blockIdx = 0; blockIdx < cell.blocks.length; blockIdx++) {
         const sourceBlock = sourceCell?.blocks[blockIdx];
         const blockMeasure = cell.blocks[blockIdx];
         if (!sourceBlock || !blockMeasure) continue;
-        contentHeight += measureTableCellBlockVisualHeight(sourceBlock, blockMeasure);
+        const visual = measureTableCellBlockVisualHeight(sourceBlock, blockMeasure);
+        const spacing = sourceBlock.kind === 'paragraph' ? sourceBlock.attrs?.spacing : undefined;
+        const before = spacing?.before ?? 0;
+        const after = spacing?.after ?? 0;
+        contentHeight += Math.max(prevAfter, before) + (visual - before - after);
+        prevAfter = after;
       }
+      // The painter renders the last block's trailing space-after as the cell
+      // content's paddingBottom (renderCellContent), so include it in the height.
+      contentHeight += prevAfter;
       cell.height = contentHeight;
       const padTop = sourceCell?.padding?.top ?? DEFAULT_CELL_PADDING_Y;
       const padBottom = sourceCell?.padding?.bottom ?? DEFAULT_CELL_PADDING_Y;

@@ -164,6 +164,18 @@ function applyContextualSpacing(blocks: FlowBlock[]): void {
       }
     }
   }
+
+  // Recurse into table cells so contextual spacing is suppressed there too —
+  // measure, row-break, and the painter all read the (mutated) cell paragraph
+  // spacing, so they stay consistent.
+  for (const block of blocks) {
+    if (block.kind !== 'table') continue;
+    for (const row of block.rows) {
+      for (const cell of row.cells) {
+        applyContextualSpacing(cell.blocks);
+      }
+    }
+  }
 }
 
 /**

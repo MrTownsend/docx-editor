@@ -74,6 +74,19 @@ export function clickToPositionInParagraph(fragmentHit: FragmentHit): PositionRe
 export function clickToPositionInTableCell(tableCellHit: TableCellHit): number | null;
 
 // @public
+export function clipRectToTableWindow(spanEl: Element, rect: {
+    readonly left: number;
+    readonly top: number;
+    readonly right: number;
+    readonly bottom: number;
+}): {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+} | null;
+
+// @public
 export function collectFootnoteRefs(blocks: FlowBlock[]): Array<{
     footnoteId: number;
     pmPos: number;
