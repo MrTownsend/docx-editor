@@ -74,8 +74,11 @@ import type {
   ImageBlock,
   TextBoxBlock,
 } from '@eigenpal/docx-editor-core/layout-engine/types';
-import type { BlockLookup } from '@eigenpal/docx-editor-core/layout-painter';
-import { enclosingSdtGroupIds, applySdtFocus } from '@eigenpal/docx-editor-core/layout-painter';
+import {
+  buildBlockLookup,
+  enclosingSdtGroupIds,
+  applySdtFocus,
+} from '@eigenpal/docx-editor-core/layout-painter';
 import type { Document } from '@eigenpal/docx-editor-core/types/document';
 import type { LayoutSelectionGate } from '@eigenpal/docx-editor-core/prosemirror';
 
@@ -365,14 +368,7 @@ export function useDocxEditor(options: UseDocxEditorOptions): UseDocxEditorRetur
       layout.value = newLayout;
 
       // Step 6: Build block lookup and paint
-      const blockLookup: BlockLookup = new Map();
-      for (let i = 0; i < blocks.length; i++) {
-        const block = blocks[i];
-        const measure = measures[i];
-        if (block && measure) {
-          blockLookup.set(String(block.id), { block, measure });
-        }
-      }
+      const blockLookup = buildBlockLookup(blocks, measures);
 
       renderPages(newLayout.pages, container, {
         pageGap,
@@ -522,6 +518,9 @@ export function useDocxEditor(options: UseDocxEditorOptions): UseDocxEditorRetur
   );
 
   function destroyEditorView() {
+    // Drop any pending coalesced layout frame so a reload (destroy → recreate)
+    // can't repaint the old document's state against the new document.
+    layoutScheduler.cancel();
     if (editorView.value) {
       editorView.value.destroy();
       editorView.value = null;
@@ -787,8 +786,7 @@ export function useDocxEditor(options: UseDocxEditorOptions): UseDocxEditorRetur
   }
 
   function destroy() {
-    layoutScheduler.cancel();
-    destroyEditorView();
+    destroyEditorView(); // cancels the layout scheduler
     destroyHfPMs();
     document.value = null;
   }

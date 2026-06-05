@@ -21,6 +21,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import {
   LayoutPainter,
   renderPages,
+  buildBlockLookup,
   type BlockLookup,
   type FootnoteRenderItem,
   type RenderPageOptions,
@@ -259,14 +260,7 @@ export function useLayoutPipeline(opts: UseLayoutPipelineOptions): UseLayoutPipe
             ? captureScrollAnchor(pagesEl, scrollParent, state.selection.head)
             : null;
 
-          const blockLookup: BlockLookup = new Map();
-          for (let i = 0; i < newBlocks.length; i++) {
-            const block = newBlocks[i];
-            const measure = newMeasures[i];
-            if (block && measure) {
-              blockLookup.set(String(block.id), { block, measure });
-            }
-          }
+          const blockLookup = buildBlockLookup(newBlocks, newMeasures);
           painterRef.current.setBlockLookup(blockLookup);
 
           const renderPagesKind = renderPages(newLayout.pages, pagesContainerRef.current, {

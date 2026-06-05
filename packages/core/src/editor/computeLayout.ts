@@ -108,8 +108,8 @@ export interface LayoutComputation {
 }
 
 /**
- * Run the pure layout compute pass. Mirrors `useLayoutPipeline`'s steps 1-3
- * (and footnote render-item build) exactly; the adapter performs the DOM paint
+ * Run the pure layout compute pass (the 6 steps in this file's header), lifted
+ * verbatim from `useLayoutPipeline`. The adapter performs the DOM paint
  * (`renderPages`), scroll-restore, `painter:painted`, and state writeback with
  * the returned values.
  */

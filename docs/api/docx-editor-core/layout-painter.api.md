@@ -23,6 +23,9 @@ export interface BlockLookupEntry {
 }
 
 // @public
+export function buildBlockLookup(blocks: FlowBlock[], measures: Measure[]): BlockLookup;
+
+// @public
 export function captureInlinePositionEmu(imageEl: HTMLElement, zoom?: number): {
     horizontalEmu: number;
     verticalEmu: number;
