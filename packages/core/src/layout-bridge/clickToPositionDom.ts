@@ -395,6 +395,8 @@ export function clipRectToTableWindow(
   return { left: rect.left, top, right: rect.right, bottom };
 }
 
+const BLANK_LINE_SELECTION_WIDTH_PX = 4;
+
 export function getSelectionRectsFromDom(
   container: HTMLElement,
   from: number,
@@ -435,6 +437,19 @@ export function getSelectionRectsFromDom(
         pageIndex,
       });
     };
+
+    if (pmStart === pmEnd) {
+      const lineEl = spanEl.closest('.layout-line') as HTMLElement | null;
+      const lineBox = (lineEl ?? spanEl).getBoundingClientRect();
+      const markerLeft = spanEl.getBoundingClientRect().left;
+      pushClipped({
+        left: markerLeft,
+        top: lineBox.top,
+        right: markerLeft + BLANK_LINE_SELECTION_WIDTH_PX,
+        bottom: lineBox.bottom,
+      });
+      continue;
+    }
 
     // Tab runs render as fixed-width spans with no text node — use their box.
     if (spanEl.classList.contains('layout-run-tab')) {
