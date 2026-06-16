@@ -11,7 +11,7 @@
  * @public
  */
 
-import { findBodyPmSpans } from './findBodyPmSpans';
+import { findBodyEmptyRuns, findBodyPmSpans } from './findBodyPmSpans';
 
 /**
  * Find ProseMirror position from a click using DOM-based detection.
@@ -397,6 +397,36 @@ export function clipRectToTableWindow(
 
 const BLANK_LINE_SELECTION_WIDTH_PX = 4;
 
+function blankLineSliverRect(markerEl: HTMLElement, overlayRect: DOMRect): DomSelectionRect | null {
+  const lineEl = markerEl.closest('.layout-line') as HTMLElement | null;
+  const lineBox = (lineEl ?? markerEl).getBoundingClientRect();
+  const left = markerEl.getBoundingClientRect().left;
+  const clipped = clipRectToTableWindow(markerEl, {
+    left,
+    top: lineBox.top,
+    right: left + BLANK_LINE_SELECTION_WIDTH_PX,
+    bottom: lineBox.bottom,
+  });
+  if (!clipped) return null;
+  const pageEl = markerEl.closest('.layout-page') as HTMLElement | null;
+  return {
+    x: clipped.left - overlayRect.left,
+    y: clipped.top - overlayRect.top,
+    width: clipped.right - clipped.left,
+    height: clipped.bottom - clipped.top,
+    pageIndex: pageEl ? Number(pageEl.dataset.pageNumber || 1) - 1 : 0,
+  };
+}
+
+function emptyParagraphRangeFor(emptyRun: HTMLElement): { pmStart: number; pmEnd: number } | null {
+  const paragraph = emptyRun.closest('.layout-paragraph') as HTMLElement | null;
+  if (!paragraph) return null;
+  const pmStart = Number(paragraph.dataset.pmStart);
+  const pmEnd = Number(paragraph.dataset.pmEnd);
+  if (!Number.isFinite(pmStart) || !Number.isFinite(pmEnd)) return null;
+  return { pmStart, pmEnd };
+}
+
 export function getSelectionRectsFromDom(
   container: HTMLElement,
   from: number,
@@ -439,15 +469,8 @@ export function getSelectionRectsFromDom(
     };
 
     if (pmStart === pmEnd) {
-      const lineEl = spanEl.closest('.layout-line') as HTMLElement | null;
-      const lineBox = (lineEl ?? spanEl).getBoundingClientRect();
-      const markerLeft = spanEl.getBoundingClientRect().left;
-      pushClipped({
-        left: markerLeft,
-        top: lineBox.top,
-        right: markerLeft + BLANK_LINE_SELECTION_WIDTH_PX,
-        bottom: lineBox.bottom,
-      });
+      const sliver = blankLineSliverRect(spanEl, overlayRect);
+      if (sliver) rects.push(sliver);
       continue;
     }
 
@@ -487,6 +510,13 @@ export function getSelectionRectsFromDom(
     for (const clientRect of Array.from(range.getClientRects())) {
       pushClipped(clientRect);
     }
+  }
+
+  for (const emptyRun of findBodyEmptyRuns(container)) {
+    const range = emptyParagraphRangeFor(emptyRun);
+    if (!range || range.pmEnd <= from || range.pmStart >= to) continue;
+    const sliver = blankLineSliverRect(emptyRun, overlayRect);
+    if (sliver) rects.push(sliver);
   }
 
   return rects;
